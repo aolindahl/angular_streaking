@@ -12,7 +12,7 @@ import sys
 from collections import deque
 import importlib
 import os.path
-import cookieBox4 as cookieBox
+import cookieBox
 import lmfit
 import aolUtil
 import lclsData
