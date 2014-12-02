@@ -71,7 +71,7 @@ def parse():
             '--configuration',
             type = str,
             metavar = 'FILENAME',
-            default = '/reg/neh/home/alindahl/cookieBoxDefaultConfig.py',
+            default = 'aolPyModules/cookieBoxDefaultConfig.py',
             help = ('Name of the module containing the configuration' +
                 'information for the analysis. Default = ' +
                 '"cookieBoxDefaultConfig.py"'))

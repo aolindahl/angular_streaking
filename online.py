@@ -1,3 +1,5 @@
+import sys
+sys.path.append('aolPyModules')
 from mpi4py import MPI
 import psana
 import arguments
@@ -10,7 +12,6 @@ import sys
 from collections import deque
 import importlib
 import os.path
-import sys
 import cookieBox4 as cookieBox
 import lmfit
 import aolUtil
@@ -96,7 +97,8 @@ def getDetectorCalibration(verbose=False, fileName=''):
         # Get the latest detector callibration values from file
         if not os.path.exists(detCalib.path):
             os.makedirs(detCalib.path)
-            np.savetxt(detClib.path + '/' + detCalib.name + '0.txt', [1]*16)
+        if not os.path.exists(detCalib.path + '/' + detCalib.name + '0.txt'):
+            np.savetxt(detCalib.path + '/' + detCalib.name + '0.txt', [1]*16)
         
         detCalib.fileNumber = np.max([int(f[len(detCalib.name):-4]) for f in
             os.listdir(detCalib.path) if len(f) > len(detCalib.name) and
@@ -324,7 +326,7 @@ def appendEventData(evt, evtData, cb, lcls, config, scales, detCalib):
 
 def appendEpicsData(epics, evtData):
     evtData.deltaK.append(epics.value('USEG:UND1:3350:KACT'))
-    evtDat.deltaEnc.append( np.array(
+    evtData.deltaEnc.append( np.array(
         [epics.value('USEG:UND1:3350:{}:ENC'.format(i)) for i in range(1,5)]))
  
 def masterEventData(evtData, cb, masterLoop, scales, verbose=False):
