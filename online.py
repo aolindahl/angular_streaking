@@ -15,7 +15,7 @@ import os.path
 import cookieBox
 import lmfit
 import aolUtil
-import lclsData
+import lcls
 
 # Set up the mpi cpmmunication
 world = MPI.COMM_WORLD
@@ -251,7 +251,7 @@ def eventDataContainer(args):
 
     return event
 
-def appendEventData(evt, evtData, cb, lcls, config, scales, detCalib):
+def appendEventData(evt, evtData, cb, config, scales, detCalib):
     evtData.sender.append(rank)
 
 
@@ -317,6 +317,7 @@ def appendEventData(evt, evtData, cb, lcls, config, scales, detCalib):
                 )
 
     # Get lcls parameters
+    lcls.setEvent(evt)
     evtData.ebEnergyL3.append(lcls.getEBeamEnergyL3_MeV())
     evtData.gasDet.append( np.array(lcls.getPulseEnergy_mJ()) )
                         
@@ -596,9 +597,6 @@ def main(args, verbose=False):
         if args.bgAverage != 1:
             cb.setBaselineSubtractionAveraging(args.bgAverage)
 
-        # Make the lcls object
-        lcls = lclsData.LCLSdata(config.lclsConfig, quiet=False)
-    
         # Set up the scales
         retardation = epics.value(config.retardationPV)
         cb.setupScales(ds.env(), config.energyScaleBinLimits,
@@ -647,13 +645,12 @@ def main(args, verbose=False):
     
                 # Pass the event to the processing
                 cb.setRawData(evt, newDataFactor=args.floatingAverage)
-                lcls.setEvent(evt)
     
                 # Randomize the amplitudes if this is requested 
                 if args.randomize:
                     cb.randomizeAmplitudes()
     
-                appendEventData(evt, eventData, cb, lcls, config, scales,
+                appendEventData(evt, eventData, cb, config, scales,
                         detCalib)
 
                 appendEpicsData(epics, eventData)
