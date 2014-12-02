@@ -423,38 +423,6 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args):
         masterLoop.buf.popleft()
         masterLoop.req.popleft()
             
-def sendPVs(evtData, scales,  pvHandler, args):
-    pvData = {}
-    # Polarization data
-    # Should contain degree of circular polarization
-    pvData['polarization'] = np.array( [
-        evtData.fiducials,
-        evtData.pol[:,6],
-        evtData.pol[:,7],
-        evtData.pol[:,4],
-        evtData.pol[:,5]] ).T.reshape(-1)
-    # Intensity information in the detectors
-    pvData['intensities'] =  np.concatenate(
-        [evtData.fiducials.reshape(-1,1), evtData.intRoi0],
-        axis=1).reshape(-1)
-    # Photon energy information
-    if args.photonEnergy != 'no':
-        pvData['energy'] = np.concatenate(
-                [evtData.fiducials.reshape(-1,1), evtData.energy],
-                axis=1).reshape(-1)
-        pvData['spectrum'] = np.concatenate(
-                [np.array([scales.energyRoi0_eV[0] + args.energyShift,
-                    scales.energyRoi0_eV[1] - scales.energyRoi0_eV[0]]),
-                    evtData.energyAmplitudeRoi0])
-
-    pvData['ebeam'] = np.array( [evtData.fiducials, evtData.ebEnergyL3]
-            ).T.flatten() 
-    
-    # Send the data
-    pvHandler.assignData(verbose=False, **pvData)
-    pvHandler.flushData()
-
-    return
 
 def zmqPlotting(evtData, augerAverage, scales, zmq):
  
@@ -593,11 +561,6 @@ def main(args, verbose=False):
             from ZmqSender import zmqSender
             zmq = zmqSender()
     
-            # Set up the PV handler
-            if args.sendPV:
-                import pvForCb
-                pvHandler = pvForCb.PvHandler(timeout=1.0)
-    
             masterLoop = masterLoopSetup(args) 
 
     
@@ -727,10 +690,6 @@ def main(args, verbose=False):
         
                 mergeMasterAndWorkerData(eventData, masterLoop, args)
                     
-                # Send data as PVs
-                if args.sendPV:
-                    sendPVs(eventData, scales, pvHandler, args)
-    
     
                 # Send data for plotting
                 zmqPlotting(eventData, augerAverage, scales, zmq)
@@ -762,10 +721,6 @@ if __name__ == '__main__':
     args = arguments.parse()
     if args.verbose:
         print args
-        if args.sendPV:
-            print 'Will send PVs'
-        else:
-            print 'Will NOT send PVs'
 
     main(args, args.verbose)
 

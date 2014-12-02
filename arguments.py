@@ -86,13 +86,6 @@ def parse():
                     + 'will be used.'))
 
     parser.add_argument(
-            '-P',
-            '--sendPV',
-            action = 'store_true',
-            help = ('Use this flag to send data as PVs over the EPICS' +
-                ' system. Default = NO PV writing.'))
-    
-    parser.add_argument(
             '-f',
             '--floatingAverage',
             type = float,
