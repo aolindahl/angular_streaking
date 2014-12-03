@@ -13,6 +13,7 @@ from collections import deque
 import importlib
 import os.path
 import cookieBox
+import tof
 import lmfit
 import aolUtil
 import lcls
@@ -156,12 +157,9 @@ def saveDetectorCalibration(masterLoop, detCalib, config, verbose=False, beta=0)
 
 def masterDataSetup(masterData):
     # Container for the master data
-    masterData.energyAmplitude = None
-    masterData.energyAmplitudeRoi0 = None
-    masterData.timeAmplitude = None
-    masterData.timeAmplitudeFiltered = None
-    masterData.timeAmplitudeRoi0 = None
-    masterData.timeAmplitudeRoi1 = None
+    masterData.energySignal_V = None
+    masterData.timeSignals_V = None
+    masterData.timeSignalseFiltered_V = None
 
     
 def masterLoopSetup(args):
@@ -192,29 +190,39 @@ def masterLoopSetup(args):
     return masterLoop
 
 
-def getScales(cb, config):
+def getScales(env, config, verbose=False):
     scales = aolUtil.struct()
     # Grab the relevant scales
-    scales.energy_eV = cb.getEnergyScales_eV()[0]
-    scales.eRoi0S = cookieBox.sliceFromRange([scales.energy_eV],
-            config.energyRoi0_eV_common)
+    scales.energy_eV = (config.energyScaleBinLimits[:-1] +
+            np.diff(config.energyScaleBinLimits)/2)
+    scales.eRoi0S = slice(
+            scales.energy_eV.searchsorted(np.min(config.energyRoi0_eV_common)),
+            scales.energy_eV.searchsorted(np.max(config.energyRoi0_eV_common)))
     scales.energyRoi0_eV = scales.energy_eV[scales.eRoi0S]
     
-    scales.time_us = cb.getTimeScales_us()
+    tempTime = tof.getTimeScale_us(env, config.cbSourceString, verbose=verbose)
+    scales.baselineSlice = slice( tempTime.searchsorted(config.baselineEnd_us) )
+    scales.timeSlice = slice(
+            tempTime.searchsorted(config.tMin_us),
+            tempTime.searchsorted(config.tMax_us) )
+    scales.time_us = tempTime[ scales.timeSlice ]
     scales.tRoi0S = cookieBox.sliceFromRange(scales.time_us,
-            config.timeRoi0_us_common)
+            [config.timeRoi0_us_common]*16)
     scales.tRoi0BgS = cookieBox.sliceFromRange(scales.time_us,
-                        config.timeRoi0Bg_us_common)
+            [config.timeRoi0Bg_us_common]*16)
     scales.tRoi0BgFactors = np.array([np.float(s.stop-s.start)/(bg.stop-bg.start) for
         s,bg in zip(scales.tRoi0S, scales.tRoi0BgS)])
     scales.tRoi1S = cookieBox.sliceFromRange(scales.time_us,
-            config.timeRoi1_us_common)
-    scales.timeRoi0_us = [t[s] for t,s in zip(scales.time_us, scales.tRoi0S)]
-    scales.timeRoiBg0_us = [t[s] for t,s in zip(scales.time_us,
-        scales.tRoi0BgS)]
-    scales.timeRoi1_us = [t[s] for t,s in zip(scales.time_us, scales.tRoi1S)]
-    scales.angles = cb.getAngles('rad')
+            [config.timeRoi1_us_common]*16)
+    scales.timeRoi0_us = [scales.time_us[s] for s in scales.tRoi0S]
+    scales.timeRoiBg0_us = [scales.time_us[s] for s in scales.tRoi0BgS]
+    scales.timeRoi1_us = [scales.time_us[s] for s in scales.tRoi1S]
+    scales.angles = cookieBox.phiRad
     scales.anglesFit = np.linspace(0, 2*np.pi, 100)
+
+    scales.scaling_VperCh, scales.offset_V = cookieBox.getSignalScaling(env, config.cbSourceString,
+            verbose=verbose)
+
     return scales
 
 def setupRecives(masterLoop, verbose=False): 
@@ -238,7 +246,7 @@ def eventDataContainer(args):
     event.intRoi0Bg = []
     event.intRoi1 = []
     event.pol = []
-    event.positions = []
+    #event.positions = []
 
     event.ebEnergyL3 = []
     event.gasDet = []
@@ -246,37 +254,77 @@ def eventDataContainer(args):
     if args.photonEnergy != 'no':
         event.energy = []
 
-    event.deltaK = []
-    event.deltaEnc = []
+    #event.deltaK = []
+    #event.deltaEnc = []
 
     return event
 
-def appendEventData(evt, evtData, cb, config, scales, detCalib):
+def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
+        verbose=False):
     evtData.sender.append(rank)
+
+    timeAmplitudeRaw = cookieBox.getRawSignals(evt, config.cbSourceString,
+            verbose=False)
+
+    if timeAmplitudeRaw is None:
+        timeAmplitudeRaw = np.zeros((16,1))
+        evtData.timeSignals_V = np.zeros((16, len(scales.time_us)))
+    else:
+        evtData.timeSignals_V = -(scales.scaling_VperCh *
+                timeAmplitudeRaw[:,scales.timeSlice].T - scales.offset_V).T
+
+    if config.baselineSubtraction == 'early':
+        bg = -(scales.scaling_VperCh * 
+                timeAmplitudeRaw[:,scales.baselineSlice].T -
+                scales.offset_V).mean(axis=0)
+    else:
+        bg = np.zeros(16)
+
+    evtData.timeSignals_V = (evtData.timeSignals_V.T - bg).T
+ 
+    if rank == 0:
+        # Grab the y data
+        if 0:
+            #evtData.timeSignalsFiltered_V = cb.getTimeAmplitudesFiltered()
+            pass
+        else:
+            evtData.timeSignalsFiltered_V = evtData.timeSignals_V
+        evtData.timeAmplitudeRoi0 = [t[s] for t, s in
+                zip(evtData.timeSignalsFiltered_V, scales.tRoi0S)]
+        evtData.timeAmplitudeRoi1 = [t[s] for t, s in
+                zip(evtData.timeSignalsFiltered_V, scales.tRoi1S)]
+
+        #evtData.energyAmplitude = np.average(cb.getEnergyAmplitudes(), axis=0)
+        #evtData.energySignal = np.array(cb.getEnergyAmplitudes()[2])
+        #evtData.energySignalRoi0 = \
+        #        evtData.energySignal[scales.eRoi0S]
+
+        if verbose:
+            print 'Rank', rank, '(master) grabbed one event.'
+        # Update the event counters
+        masterLoop.nProcessed += 1
 
 
     # Get the intensities
     evtData.intRoi0.append(
-        (
-            cb.getIntensityDistribution(domain='Time',
-                roiSlices = scales.tRoi0S,
-                detFactors = detCalib.factors)
-            - cb.getIntensityDistribution(domain='Time',
-                roiSlices = scales.tRoi0BgS,
-                detFactors = detCalib.factors) * scales.tRoi0BgFactors
-            ) * config.nanFitMask)
+            np.array([ sig[sl].sum() - sig[slBg].sum() * fact
+                for sig, sl, slBg, fact in zip(
+                    evtData.timeSignals_V,
+                    scales.tRoi0S,
+                    scales.tRoi0BgS,
+                    scales.tRoi0BgFactors) ]) * detCalib.factors * config.nanFitMask)
 
-    #evtData.intRoi0Bg
     
-    evtData.intRoi1.append(cb.getIntensityDistribution(domain='Time',
-        roiSlices=scales.tRoi1S, detFactors=detCalib.factors) *
-        config.nanFitMask)
-        
+    evtData.intRoi1.append(
+            np.array([ sig[sl].sum() for sig, sl in zip(
+                evtData.timeSignals_V,
+                scales.tRoi1S) ]) * detCalib.factors)
+
     # Get the initial fit parameters
     #params = cookieBox.initialParams(evtData.intRoi0[-1])
     params = cookieBox.initialParams()
     params['A'].value, params['linear'].value, params['tilt'].value = \
-            cb.proj.solve(evtData.intRoi0[-1], args.beta)
+            cookieBox.proj.solve(evtData.intRoi0[-1], args.beta)
     # Lock the beta parameter. To the command line?
     params['beta'].value = args.beta
     params['beta'].vary = False
@@ -306,15 +354,15 @@ def appendEventData(evt, evtData, cb, config, scales, detCalib):
         ]))
 
     # Beam position
-    evtData.positions.append( cb.getPositions() )
+    #evtData.positions.append( cb.getPositions() )
     
     # Get the photon energy center and width
-    if args.photonEnergy != 'no':
-        evtData.energy.append(
-                cb.getPhotonEnergy(
-                    energyShift=args.energyShift
-                    )
-                )
+    #if args.photonEnergy != 'no':
+    #    evtData.energy.append(
+    #            cb.getPhotonEnergy(
+    #                energyShift=args.energyShift
+    #                )
+    #            )
 
     # Get lcls parameters
     lcls.setEvent(evt)
@@ -329,25 +377,6 @@ def appendEpicsData(epics, evtData):
     evtData.deltaK.append(epics.value('USEG:UND1:3350:KACT'))
     evtData.deltaEnc.append( np.array(
         [epics.value('USEG:UND1:3350:{}:ENC'.format(i)) for i in range(1,5)]))
- 
-def masterEventData(evtData, cb, masterLoop, scales, verbose=False):
-    # Grab the y data
-    #evtData.energyAmplitude = np.average(cb.getEnergyAmplitudes(), axis=0)
-    evtData.energyAmplitude = np.array(cb.getEnergyAmplitudes()[2])
-    evtData.energyAmplitudeRoi0 = \
-            evtData.energyAmplitude[scales.eRoi0S]
-    evtData.timeAmplitude = cb.getTimeAmplitudes()
-    evtData.timeAmplitudeFiltered = cb.getTimeAmplitudesFiltered()
-    evtData.timeAmplitudeRoi0 = [t[s] for t, s in
-            zip(evtData.timeAmplitudeFiltered, scales.tRoi0S)]
-    evtData.timeAmplitudeRoi1 = [t[s] for t, s in
-            zip(evtData.timeAmplitudeFiltered, scales.tRoi1S)]
-
-    if verbose:
-        print 'Rank', rank, '(master) grabbed one event.'
-    # Update the event counters
-    masterLoop.nProcessed += 1
-
  
 def packageAndSendData(evtData, req, verbose=False):
     # Make a data packet
@@ -407,17 +436,17 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args):
         masterLoop.calibValues.append(evtData.intRoi0 if args.calibrate==0 else
                 evtData.intRoi1)
 
-    evtData.positions = np.array( evtData.positions ) 
+    #evtData.positions = np.array( evtData.positions ) 
 
     evtData.ebEnergyL3 = np.array( evtData.ebEnergyL3 + [ d[dEL3] for d in
         masterLoop.arrived ])
     evtData.gasDet = np.array( evtData.gasDet + [ d[dFEE] for d in
         masterLoop.arrived ])
 
-    evtData.deltaK = np.array( evtData.deltaK + [ d[dDeltaK] for d in
-        masterLoop.arrived ])
-    evtData.deltaEnc = np.array( evtData.deltaEnc + [ d[dDeltaEnc] for d in
-        masterLoop.arrived ])
+    #evtData.deltaK = np.array( evtData.deltaK + [ d[dDeltaK] for d in
+    #    masterLoop.arrived ])
+    #evtData.deltaEnc = np.array( evtData.deltaEnc + [ d[dDeltaEnc] for d in
+    #    masterLoop.arrived ])
 
     # delete the recived data buffers
     for i in range(masterLoop.nArrived):
@@ -451,28 +480,32 @@ def zmqPlotting(evtData, augerAverage, scales, zmq):
             'linear':evtData.pol[-1][6]}
     plotData['strip'] = [evtData.fiducials, evtData.pol]
     plotData['traces'] = {}
-    if evtData.timeAmplitude != None:
-        plotData['traces']['timeRaw'] = evtData.timeAmplitude
-        plotData['traces']['timeFiltered'] = evtData.timeAmplitudeFiltered
-        plotData['traces']['timeRoi0'] = evtData.timeAmplitudeRoi0
-        plotData['traces']['timeRoi1'] = evtData.timeAmplitudeRoi1
-        plotData['traces']['timeScale'] = scales.time_us
-        plotData['traces']['timeScaleRoi0'] = scales.timeRoi0_us
-        plotData['traces']['timeScaleRoi1'] = scales.timeRoi1_us
+    if evtData.timeSignals_V != None:
+        plotData['traces']['timeRaw'] = evtData.timeSignals_V
+        plotData['traces']['timeFiltered'] = evtData.timeSignalsFiltered_V
+        plotData['traces']['timeRoi0'] = [sig[sl] for sig, sl in
+                zip(evtData.timeSignalsFiltered_V, scales.tRoi0S)]
+        plotData['traces']['timeRoi1'] = [sig[sl] for sig, sl in
+                zip(evtData.timeSignalsFiltered_V, scales.tRoi1S)]
+        plotData['traces']['timeScale'] = [scales.time_us]*16
+        plotData['traces']['timeScaleRoi0'] = [ scales.time_us[sl] for sl in
+                scales.tRoi0S ]
+        plotData['traces']['timeScaleRoi1'] = [ scales.time_us[sl] for sl in
+                scales.tRoi1S ]
     if args.photonEnergy != 'no':
         plotData['energy'] = np.concatenate(
                 [evtData.fiducials.reshape(-1,1), evtData.energy],
                 axis=1).reshape(-1)
-    plotData['spectrum'] = {}
-    plotData['spectrum']['energyScale'] = scales.energy_eV
-    plotData['spectrum']['energyScaleRoi0'] = scales.energyRoi0_eV
-    plotData['spectrum']['energyAmplitude'] = evtData.energyAmplitude
-    plotData['spectrum']['energyAmplitudeRoi0'] = \
-            evtData.energyAmplitudeRoi0
+    #plotData['spectrum'] = {}
+    #plotData['spectrum']['energyScale'] = scales.energy_eV
+    #plotData['spectrum']['energyScaleRoi0'] = scales.energyRoi0_eV
+    #plotData['spectrum']['energyAmplitude'] = evtData.energySignals
+    #plotData['spectrum']['energyAmplitudeRoi0'] = \
+    #        evtData.energySignals
             
 
     #position data
-    plotData['positions'] = evtData.positions.mean(axis=0)
+    #plotData['positions'] = evtData.positions.mean(axis=0)
 
 
     zmq.sendObject(plotData)
@@ -504,9 +537,9 @@ def openSaveFile(format, online=False, config=None):
         for i in range(16):
             file.write('\tphoto_{}'.format(i))
         file.write('\tI0\tI0_err\tbeta\tbeta_err\ttilt\ttilt_err\tlinDegree\tlinDegree_err')
-        file.write('\tdeltaK')
-        for i in range(4):
-            file.write('\tdeltaEnc{}'.format(i+1))
+        #file.write('\tdeltaK')
+        #for i in range(4):
+        #    file.write('\tdeltaEnc{}'.format(i+1))
 
         file.write('\n')
         file.flush()
@@ -526,9 +559,9 @@ def writeDataToFile(file, data, format):
                 line += '\t' + repr(a)
             for a in data.pol[i,:]:
                 line += '\t' + repr(a)
-            line += '\t' + repr(data.deltaK[i])
-            for a in data.deltaEnc[i,:]:
-                line += '\t' + repr(a)
+            #line += '\t' + repr(data.deltaK[i])
+            #for a in data.deltaEnc[i,:]:
+            #    line += '\t' + repr(a)
 
             line += '\n'
 
@@ -591,19 +624,11 @@ def main(args, verbose=False):
         # datasource is initialized enough so that the env object is avaliable.
         evt = events.next()
     
-        # Make the cookie box object
-        cb = cookieBox.CookieBox(config, verbose=False)
-        cb.proj.setFitMask(config.boolFitMask)
-        if args.bgAverage != 1:
-            cb.setBaselineSubtractionAveraging(args.bgAverage)
-
-        # Set up the scales
-        retardation = epics.value(config.retardationPV)
-        cb.setupScales(ds.env(), config.energyScaleBinLimits,
-                retardation=retardation)
+        cookieBox.proj.setFitMask(config.boolFitMask)
     
         # Get the scales that we need
-        scales = getScales(cb, config)
+        scales = getScales(ds.env(), config)
+        print scales
     
         # The main loop that never ends...
         while 1:
@@ -612,55 +637,23 @@ def main(args, verbose=False):
                 
             # The master should set up the recive requests
             if rank == 0:
-                masterDataSetup(eventData)
+                #masterDataSetup(eventData)
                 setupRecives(masterLoop, verbose=verbose)
                
             # The master should do something usefull while waiting for the time
             # to pass
             while (time.time() < masterLoop.tStop) if rank==0 else 1 :
         
-                # If offline
-                #if  args.offline:
-                    # wait for a while
-                    # time.sleep(0.00001)
-    
-    
                 # Get the next event
                 evt = events.next()
 
-                #Check if the retardation have changed
-                tempRet = epics.value(config.retardationPV)
-                if tempRet != retardation:
-                    # If so the scales have to be updated
-                    retardation = tempRet
-                    # Set up the scales
-                    cb.setupScales(ds.env(), config.energyScaleBinLimits,
-                            retardation=retardation)
-    
-                    # Get the scales that we need
-                    scales = getScales(cb, config)
+                appendEventData(evt, eventData, config, scales, detCalib,
+                        masterLoop if rank==0 else None, verbose=verbose)
+
+                #appendEpicsData(epics, eventData)
 
                 
-
-    
-                # Pass the event to the processing
-                cb.setRawData(evt, newDataFactor=args.floatingAverage)
-    
-                # Randomize the amplitudes if this is requested 
-                if args.randomize:
-                    cb.randomizeAmplitudes()
-    
-                appendEventData(evt, eventData, cb, config, scales,
-                        detCalib)
-
-                appendEpicsData(epics, eventData)
-
-                # rank 0 grabs some trace data
-                if rank == 0:
-                    masterEventData(eventData, cb, masterLoop, scales,
-                            verbose=verbose)
-                
-                   # Everyone but the master goes out of the loop here
+                # Everyone but the master goes out of the loop here
                 if rank > 0:
                     break
             
