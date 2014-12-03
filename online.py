@@ -47,10 +47,13 @@ dEL3 = s
 s += 1
 dFEE = slice(s, s+4)
 s += 4
-dDeltaK = s
-s += 1
-dDeltaEnc = slice(s, s+4)
-s += 4
+#dDeltaK = s
+#s += 1
+#dDeltaEnc = slice(s, s+4)
+#s += 4
+nEvr = 10
+dEvr = slice(s, s+nEvr)
+s += nEvr
 
 dSize = s
 
@@ -254,6 +257,8 @@ def eventDataContainer(args):
     if args.photonEnergy != 'no':
         event.energy = []
 
+    event.evrCodes = []
+
     #event.deltaK = []
     #event.deltaEnc = []
 
@@ -368,6 +373,9 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
     lcls.setEvent(evt)
     evtData.ebEnergyL3.append(lcls.getEBeamEnergyL3_MeV())
     evtData.gasDet.append( np.array(lcls.getPulseEnergy_mJ()) )
+    evrCodes = np.array( lcls.getEvrCodes(verbose=verbose) )
+    evrCodes.resize(nEvr)
+    evtData.evrCodes.append( evrCodes.copy()  )
                         
     # timing information
     evtData.fiducials.append( lcls.getEventFiducial())
@@ -399,10 +407,11 @@ def packageAndSendData(evtData, req, verbose=False):
     data[dEL3] = evtData.ebEnergyL3[0]
     #print 'rank {} with gasdets: {}'.format(rank, repr(evtData.gasDet[0]))
     data[dFEE] = evtData.gasDet[0]
+    data[dEvr] = evtData.evrCodes[0]
 
     # DELTA data
-    data[dDeltaK] = evtData.deltaK[0]
-    data[dDeltaEnc] = evtData.deltaEnc[0]
+    #data[dDeltaK] = evtData.deltaK[0]
+    #data[dDeltaEnc] = evtData.deltaEnc[0]
 
     # wait if there is an active send request
     if req != None:
@@ -442,6 +451,8 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args):
         masterLoop.arrived ])
     evtData.gasDet = np.array( evtData.gasDet + [ d[dFEE] for d in
         masterLoop.arrived ])
+    evtData.evrCodes = np.array( evtData.evrCodes + [ d[dFEE] for d in
+        masterLoop.arrived ]) 
 
     #evtData.deltaK = np.array( evtData.deltaK + [ d[dDeltaK] for d in
     #    masterLoop.arrived ])
