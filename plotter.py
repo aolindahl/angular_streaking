@@ -1,13 +1,16 @@
-import ZmqSender
+#############
+import sys
 import matplotlib.animation as animation
 import zmq
 import matplotlib.pyplot as plt
 import numpy as np
 import time
-import sys
-import cookieBox
 import argparse
 
+#############
+sys.path.append('aolPyModules')
+import ZmqSender
+import cookieBox
 
 def mainPlotter(args, verbose=False):
     """\
@@ -244,21 +247,18 @@ def mainPlotter(args, verbose=False):
             ax.figure.canvas.draw()
 
 
-        #position plot
-        plotKey = 'positions'
+        #Timing plot
+        plotKey = 'timeHist'
         if plotKey in data.keys():
-            positions = data[plotKey]
-            phi = np.arange(0, np.pi, np.radians(22.5)) + np.pi * ( positions <
-                    0 )
-
-            positions = np.abs( positions ) 
+            plotData = data[plotKey] 
         
-            l = figs[4].axes[0].lines[0]
-            l.set_xdata(phi)
-            l.set_ydata(positions)
+            lines = figs[4].axes[0].lines
+            for l, y in zip(lines, ['full', 'roi0', 'roi1']):
+                l.set_xdata(plotData['time'])
+                l.set_ydata(plotData[y])
 
-            #figs[4].axes[0].relim()
-            #figs[4].axes[0].autoscale_view()
+            figs[4].axes[0].relim()
+            figs[4].axes[0].autoscale_view()
 
             figs[4].canvas.draw()
             
@@ -326,11 +326,12 @@ def mainPlotter(args, verbose=False):
 
 
 
-        # Position plot
-        fig5 = plt.figure('Beam position')
-        fig5.add_subplot(111, polar=True)
-        fig5.axes[0].plot([], [], 'o')
-        fig5.axes[0].set_ylim(0, 0.002)
+        # Timing plot
+        fig5 = plt.figure('Timing')
+        fig5.add_subplot(111)
+        fig5.axes[0].plot([], [], 'b.')
+        fig5.axes[0].plot([], [], 'r.')
+        fig5.axes[0].plot([], [], 'g.')
         fig5.show()
 
         return [fig1, fig2, fig3, fig4, fig5]
