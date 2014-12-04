@@ -1,10 +1,9 @@
+##############
+# General python modules
 import sys
-sys.path.append('aolPyModules')
 from mpi4py import MPI
-import psana
-import arguments
-import matplotlib.pyplot as plt
-plt.ion()
+#import matplotlib.pyplot as plt
+#plt.ion()
 import numpy as np
 import time
 import platform
@@ -12,12 +11,24 @@ import sys
 from collections import deque
 import importlib
 import os.path
+import lmfit
+from scipy.stats import binned_statistic
+
+
+#############
+# LCLS modules
+import psana
+
+
+############
+# Custom modules
+# Soume found in:
+sys.path.append('aolPyModules')
 import cookieBox
 import tof
-import lmfit
 import aolUtil
 import lcls
-from scipy.stats import binned_statistic
+import arguments
 
 # Set up the mpi cpmmunication
 world = MPI.COMM_WORLD
@@ -647,7 +658,8 @@ def zmqPlotting(evtData, augerAverage, scales, zmq):
     #position data
     #plotData['positions'] = evtData.positions.mean(axis=0)
 
-    plotData['timeHit'] = makeTimingHistogram(evtData)
+    plotData['timeHist'] = makeTimingHistogram(evtData)
+    print  plotData['timeHist']
 
     zmq.sendObject(plotData)
                 
