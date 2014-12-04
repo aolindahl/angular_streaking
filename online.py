@@ -17,13 +17,15 @@ import tof
 import lmfit
 import aolUtil
 import lcls
+from scipy.stats import binned_statistic
 
 # Set up the mpi cpmmunication
 world = MPI.COMM_WORLD
 rank = world.Get_rank()
 worldSize = world.Get_size()
 
-
+c_0_mm_per_fs = 2.99792458e8 * 1e3 * 1e-15
+# http://physics.nist.gov/cgi-bin/cuu/Value?c|search_for=universal_in! 2014-04-21
 
 #############
 # Data definitions
@@ -35,6 +37,8 @@ dFiducials = s
 s += 1
 dTime = s
 s += 1
+dFull = slice(s, s+16)
+s += 16
 dIntRoi0 = slice(s, s+16)
 s += 16
 dIntRoi1 = slice(s, s+16)
@@ -51,6 +55,12 @@ s += 4
 #s += 1
 #dDeltaEnc = slice(s, s+4)
 #s += 4
+dDelayStage = s
+s += 1
+dFsTiming = s
+s += 1
+dTtTime = s
+s += 1
 nEvr = 10
 dEvr = slice(s, s+nEvr)
 s += nEvr
@@ -245,6 +255,7 @@ def eventDataContainer(args):
     event.sender = []
     event.fiducials = []
     event.times = []
+    event.full = []
     event.intRoi0 = []
     event.intRoi0Bg = []
     event.intRoi1 = []
@@ -261,6 +272,9 @@ def eventDataContainer(args):
 
     #event.deltaK = []
     #event.deltaEnc = []
+    event.delayStage = []
+    event.fsTiming = []
+    event.ttTime = []
 
     return event
 
@@ -308,6 +322,10 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
             print 'Rank', rank, '(master) grabbed one event.'
         # Update the event counters
         masterLoop.nProcessed += 1
+
+    evtData.full.append(
+            np.array([ sig.sum() for sig in evtData.timeSignals_V ]) *
+            detCalib.factors * config.nanFitMask)
 
 
     # Get the intensities
@@ -373,7 +391,7 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
     lcls.setEvent(evt)
     evtData.ebEnergyL3.append(lcls.getEBeamEnergyL3_MeV())
     evtData.gasDet.append( np.array(lcls.getPulseEnergy_mJ()) )
-    evrCodes = np.array( lcls.getEvrCodes(verbose=verbose) )
+    evrCodes = np.array( lcls.getEvrCodes(verbose=False) )
     evrCodes.resize(nEvr)
     evtData.evrCodes.append( evrCodes.copy()  )
                         
@@ -382,9 +400,29 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
     evtData.times.append( lcls.getEventTime())
 
 def appendEpicsData(epics, evtData):
-    evtData.deltaK.append(epics.value('USEG:UND1:3350:KACT'))
-    evtData.deltaEnc.append( np.array(
-        [epics.value('USEG:UND1:3350:{}:ENC'.format(i)) for i in range(1,5)]))
+    #evtData.deltaK.append(epics.value('USEG:UND1:3350:KACT'))
+    #evtData.deltaEnc.append( np.array(
+    #    [epics.value('USEG:UND1:3350:{}:ENC'.format(i)) for i in range(1,5)]))
+
+    # Continuum delay stage in blue box
+    stage =  epics.value('AMO:LAS:DLS:05:MTR.RBV')
+    if stage is None:
+        stage = np.nan
+    evtData.delayStage.append( - stage * 2 / c_0_mm_per_fs )
+
+    # Laster to x-ray locking system timing
+    fs = epics.value('LAS:FS1:VIT:FS_TGT_TIME')
+    if fs is None:
+        fs = np.nan
+    evtData.fsTiming.append( fs * 1e6 )
+
+    # Time tool signal
+    tt = epics.value('TTSPEC:FLTPOS_PS') 
+    width = epics.value('TTSPEC:FLTPOSFWHM') 
+    if (tt is None) or (width is None) or (width > 40.):
+        tt = np.nan
+    evtData.ttTime.append(  tt * 1e3 )
+
  
 def packageAndSendData(evtData, req, verbose=False):
     # Make a data packet
@@ -395,6 +433,7 @@ def packageAndSendData(evtData, req, verbose=False):
     data[dFiducials] = evtData.fiducials[0]
     data[dTime] = evtData.times[0]
     # amplitude 
+    data[dFull] = evtData.full[0]
     data[dIntRoi0] = evtData.intRoi0[0]
     data[dIntRoi1] = evtData.intRoi1[0]
     # polarization
@@ -412,6 +451,9 @@ def packageAndSendData(evtData, req, verbose=False):
     # DELTA data
     #data[dDeltaK] = evtData.deltaK[0]
     #data[dDeltaEnc] = evtData.deltaEnc[0]
+    data[dDelayStage] = evtData.delayStage[0]
+    data[dFsTiming] = evtData.fsTiming[0]
+    data[dTtTime] = evtData.ttTime[0]
 
     # wait if there is an active send request
     if req != None:
@@ -433,6 +475,9 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args):
         masterLoop.arrived ])
     evtData.times = np.array( evtData.times +[ d[dTime] for d in
         masterLoop.arrived ])
+        
+    evtData.full = np.array( evtData.full +
+            [d[dFull] for d in masterLoop.arrived])
     evtData.intRoi0 = np.array( evtData.intRoi0 +
             [d[dIntRoi0] for d in masterLoop.arrived])
     evtData.intRoi1 = np.array( evtData.intRoi1 +
@@ -451,19 +496,102 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args):
         masterLoop.arrived ])
     evtData.gasDet = np.array( evtData.gasDet + [ d[dFEE] for d in
         masterLoop.arrived ])
-    evtData.evrCodes = np.array( evtData.evrCodes + [ d[dFEE] for d in
+    evtData.evrCodes = np.array( evtData.evrCodes + [ d[dEvr] for d in
         masterLoop.arrived ]) 
 
     #evtData.deltaK = np.array( evtData.deltaK + [ d[dDeltaK] for d in
     #    masterLoop.arrived ])
     #evtData.deltaEnc = np.array( evtData.deltaEnc + [ d[dDeltaEnc] for d in
     #    masterLoop.arrived ])
+    evtData.delayStage = np.array( evtData.delayStage + [ d[dDelayStage] for d
+        in masterLoop.arrived ])
+    evtData.fsTiming = np.array( evtData.fsTiming + [ d[dFsTiming] for d in
+        masterLoop.arrived ])
+    evtData.ttTime = np.array( evtData.ttTime + [ d[dTtTime] for d in
+        masterLoop.arrived ])
 
     # delete the recived data buffers
     for i in range(masterLoop.nArrived):
         masterLoop.buf.popleft()
         masterLoop.req.popleft()
-            
+
+# lists for the reference information in the timing histogram
+nShotsRef = 1000
+fullRefBuff = deque(maxlen=nShotsRef)
+roi0RefBuff = deque(maxlen=nShotsRef)
+roi1RefBuff = deque(maxlen=nShotsRef)
+
+nShotsHistory = 10000
+fullBuff = deque(maxlen=nShotsHistory)
+roi0Buff = deque(maxlen=nShotsHistory)
+roi1Buff = deque(maxlen=nShotsHistory)
+tBuff = deque(maxlen=nShotsHistory)
+
+
+             
+def makeTimingHistogram(evtData):
+    
+    # No alignment reference evr code
+    refEvr = 67
+
+    # Calculate signals for all the events
+    #Average ove the two last fee gas dets
+    fee = evtData.gasDet[:,2:].mean(axis=1)
+    full = evtData.full.mean(axis=1) / fee
+    roi0 = evtData.intRoi0.mean(axis=1) / fee
+    roi1 = evtData.intRoi1.mean(axis=1) / fee
+
+    delay = evtData.fsTiming + evtData.delayStage + evtData.ttTime
+    
+    nanMask = ~ ( np.isnan(fee)
+            | np.isnan(full)
+            | np.isnan(roi0)
+            | np.isnan(roi1)
+            | np.isnan(delay) )
+
+
+    # Update the reference
+    refMask = np.array( [(refEvr in codes) for codes in evtData.evrCodes] )
+    # Add the events to theref lists
+    refFull = None
+    refRoi0 = None
+    refRoi1 = None
+    for refBuff, ref, buff, data in zip(
+            [fullRefBuff, roi0RefBuff, roi1RefBuff],
+            [refFull, refRoi0, refRoi1],
+            [fullBuff, roi0Buff, roi1Buff],
+            [full, roi0, roi1]):
+        refBuff.extend(data[refMask & nanMask])
+        ref = np.mean(refBuff)
+        if np.isnan(ref):
+            ref = 0
+        # extend the buffer with the data minus reference
+        buff.extend( (data-ref)[ (~refMask) & nanMask ] )
+
+    # extend the time
+    tBuff.extend( delay[ (~refMask) & nanMask ] )
+
+    if len(tBuff) == 0:
+        return
+
+    binSize = 20.
+    binEdgeMin = np.floor( np.min(tBuff) / binSize )
+    binEdgeMax = np.ceil( np.max(tBuff) / binSize )
+    binEdges = np.arange(binEdgeMin, binEdgeMax + 1) * binSize
+    timeBins = binEdges[:-1] + np.diff( binEdges ) / 2
+
+    fullBinned, _, _ =  binned_statistic(tBuff, fullBuff, statistic='mean',
+            bins=binEdges)
+    roi0Binned, _, _ =  binned_statistic(tBuff, roi0Buff, statistic='mean',
+            bins=binEdges)
+    roi1Binned, _, _ =  binned_statistic(tBuff, roi1Buff, statistic='mean',
+            bins=binEdges)
+
+    return {'time' : timeBins,
+            'full' : fullBinned,
+            'roi0' : roi0Binned,
+            'roi1' : roi1Binned}
+
 
 def zmqPlotting(evtData, augerAverage, scales, zmq):
  
@@ -483,6 +611,7 @@ def zmqPlotting(evtData, augerAverage, scales, zmq):
         augerAverage.plotRoi1 = evtData.intRoi1[-1,:]
     plotData = {}
     plotData['polar'] = {
+            'full':evtData.full[-1],
             'roi0':evtData.intRoi0[-1,:],
             'roi1':augerAverage.plotRoi1,
             'A':evtData.pol[-1][0],
@@ -518,6 +647,7 @@ def zmqPlotting(evtData, augerAverage, scales, zmq):
     #position data
     #plotData['positions'] = evtData.positions.mean(axis=0)
 
+    plotData['timeHit'] = makeTimingHistogram(evtData)
 
     zmq.sendObject(plotData)
                 
@@ -661,7 +791,7 @@ def main(args, verbose=False):
                 appendEventData(evt, eventData, config, scales, detCalib,
                         masterLoop if rank==0 else None, verbose=verbose)
 
-                #appendEpicsData(epics, eventData)
+                appendEpicsData(epics, eventData)
 
                 
                 # Everyone but the master goes out of the loop here
@@ -690,7 +820,7 @@ def main(args, verbose=False):
                         enumerate(masterLoop.buf) if i < masterLoop.nArrived]
         
                 mergeMasterAndWorkerData(eventData, masterLoop, args)
-                    
+
     
                 # Send data for plotting
                 zmqPlotting(eventData, augerAverage, scales, zmq)
