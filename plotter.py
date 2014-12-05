@@ -139,17 +139,11 @@ def mainPlotter(args, verbose=False):
             storage['err_tilt'] = np.concatenate(
                     [storage['err_tilt'], data[plotKey][1][:,5]] )
 
-            #storage['int'] = np.concatenate(
-            #        [storage['int'], np.mean(data['polar']['roi1']).reshape(1)])
-            #storage['intFid'] = np.concatenate(
-            #        [storage['intFid'], storage['fiducial'][-1].reshape(1)])
             storage['int'] = np.concatenate(
                     [storage['int'], np.mean(data[plotKey][2], axis=1)] )
 
-            for k in ['fiducial', 'degree', 'err_degree', 'tilt', 'err_tilt']:
-                if len(storage[k]) > 1000:
-                    storage[k] = storage[k][-1000:]
-            for k in ['int', 'intFid']:
+            for k in ['fiducial', 'degree', 'err_degree', 'tilt', 'err_tilt',
+                    'int']:
                 if len(storage[k]) > 1000:
                     storage[k] = storage[k][-1000:]
 
@@ -199,7 +193,7 @@ def mainPlotter(args, verbose=False):
             ax = figs[2].axes[2]
             ax.cla()
             ax.set_title('Intensity')
-            ax.plot(storage['fiducial'], storage['int'])
+            ax.plot(storage['fiducial'], storage['int'], '.')
             ax.relim()
             ax.autoscale_view()
             #ax.set_xlim(xLim)
