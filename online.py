@@ -330,8 +330,8 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
         #evtData.energySignalRoi0 = \
         #        evtData.energySignal[scales.eRoi0S]
 
-        if verbose:
-            print 'Rank', rank, '(master) grabbed one event.'
+        #if verbose:
+        #    print 'Rank', rank, '(master) grabbed one event.'
         # Update the event counters
         masterLoop.nProcessed += 1
 
@@ -791,7 +791,7 @@ def main(args, verbose=False):
                 
             # The master should set up the recive requests
             if rank == 0:
-                #masterDataSetup(eventData)
+                masterDataSetup(eventData)
                 setupRecives(masterLoop, verbose=verbose)
                
             # The master should do something usefull while waiting for the time
