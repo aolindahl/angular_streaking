@@ -630,7 +630,7 @@ def zmqPlotting(evtData, augerAverage, scales, zmq):
             'beta':evtData.pol[-1][2],
             'tilt':evtData.pol[-1][4],
             'linear':evtData.pol[-1][6]}
-    plotData['strip'] = [evtData.fiducials, evtData.pol]
+    plotData['strip'] = [evtData.fiducials, evtData.pol, evtData.intRoi0]
     plotData['traces'] = {}
     if evtData.timeSignals_V != None:
         plotData['traces']['timeRaw'] = evtData.timeSignals_V

@@ -68,6 +68,10 @@ def mainPlotter(args, verbose=False):
                     for k2, v2 in v.iteritems():
                         print '\t\t{} of type {}'.format(k2, type(v2)),
                         print ''
+                if type(v) == list:
+                    print 'with elements:'
+                    for elem in v:
+                        print type(elem), elem.shape
                 else:
                     print ''
 
@@ -135,17 +139,19 @@ def mainPlotter(args, verbose=False):
             storage['err_tilt'] = np.concatenate(
                     [storage['err_tilt'], data[plotKey][1][:,5]] )
 
+            #storage['int'] = np.concatenate(
+            #        [storage['int'], np.mean(data['polar']['roi1']).reshape(1)])
+            #storage['intFid'] = np.concatenate(
+            #        [storage['intFid'], storage['fiducial'][-1].reshape(1)])
             storage['int'] = np.concatenate(
-                    [storage['int'], np.mean(data['polar']['roi1']).reshape(1)])
-            storage['intFid'] = np.concatenate(
-                    [storage['intFid'], storage['fiducial'][-1].reshape(1)])
+                    [storage['int'], np.mean(data[plotKey][2], axis=1)] )
 
             for k in ['fiducial', 'degree', 'err_degree', 'tilt', 'err_tilt']:
                 if len(storage[k]) > 1000:
                     storage[k] = storage[k][-1000:]
             for k in ['int', 'intFid']:
                 if len(storage[k]) > 1000:
-                    storage[k] = storage[k][-100:]
+                    storage[k] = storage[k][-1000:]
 
 
             #ax.plot(storage['fiducial'], storage['degree'],'.')
@@ -193,9 +199,11 @@ def mainPlotter(args, verbose=False):
             ax = figs[2].axes[2]
             ax.cla()
             ax.set_title('Intensity')
-            ax.plot(storage['intFid'], storage['int'], 'o')
-            ax.set_xlim(xLim)
-            ax.set_ylim(ymin=0)
+            ax.plot(storage['fiducial'], storage['int'])
+            ax.relim()
+            ax.autoscale_view()
+            #ax.set_xlim(xLim)
+            #ax.set_ylim(ymin=0)
 
             figs[2].canvas.draw()
 
@@ -253,15 +261,16 @@ def mainPlotter(args, verbose=False):
         if plotKey in data.keys():
             plotData = data[plotKey] 
         
-            lines = figs[4].axes[0].lines
-            for l, y in zip(lines, ['full', 'roi0', 'roi1']):
-                l.set_xdata(plotData['time'])
-                l.set_ydata(plotData[y])
+            if plotData is not None:
+                lines = figs[4].axes[0].lines
+                for l, y in zip(lines, ['full', 'roi0', 'roi1']):
+                    l.set_xdata(plotData['time'])
+                    l.set_ydata(plotData[y])
 
-            figs[4].axes[0].relim()
-            figs[4].axes[0].autoscale_view()
+                figs[4].axes[0].relim()
+                figs[4].axes[0].autoscale_view()
 
-            figs[4].canvas.draw()
+                figs[4].canvas.draw()
             
 
 
