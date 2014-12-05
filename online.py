@@ -552,7 +552,7 @@ def makeTimingHistogram(evtData):
     roi0 = evtData.intRoi0.mean(axis=1) / fee
     roi1 = evtData.intRoi1.mean(axis=1) / fee
 
-    delay = evtData.fsTiming + evtData.delayStage + evtData.ttTime
+    delay = evtData.delayStage + evtData.ttTime
     
     nanMask = ~ ( np.isnan(fee)
             | np.isnan(full)
