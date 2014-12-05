@@ -7,6 +7,7 @@ from mpi4py import MPI
 import numpy as np
 import time
 import platform
+import os
 import sys
 from collections import deque
 import importlib
@@ -23,7 +24,7 @@ import psana
 ############
 # Custom modules
 # Soume found in:
-sys.path.append('aolPyModules')
+sys.path.append( os.path.dirname(os.path.abspath(__file__)) +  '/aolPyModules')
 import cookieBox
 import tof
 import aolUtil
@@ -659,7 +660,7 @@ def zmqPlotting(evtData, augerAverage, scales, zmq):
     #plotData['positions'] = evtData.positions.mean(axis=0)
 
     plotData['timeHist'] = makeTimingHistogram(evtData)
-    print  plotData['timeHist']
+    #print  plotData['timeHist']
 
     zmq.sendObject(plotData)
                 

@@ -1,5 +1,6 @@
 #############
 import sys
+import os
 import matplotlib.animation as animation
 import zmq
 import matplotlib.pyplot as plt
@@ -8,7 +9,7 @@ import time
 import argparse
 
 #############
-sys.path.append('aolPyModules')
+sys.path.append( os.path.dirname(os.path.abspath(__file__)) +  '/aolPyModules')
 import ZmqSender
 import cookieBox
 
