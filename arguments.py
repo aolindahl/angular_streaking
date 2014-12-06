@@ -86,12 +86,12 @@ def parse():
                     + 'will be used.'))
 
     parser.add_argument(
-            '-f',
-            '--floatingAverage',
+            '-tA',
+            '--traceAverage',
             type = float,
             metavar = 'WEIGHT',
             default = None,
-            help = ('Moving average with weight on last point'))
+            help = ('Moving average of the tracec with weight on last point'))
 
     parser.add_argument(
             '--roi1Average',

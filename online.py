@@ -291,7 +291,7 @@ def eventDataContainer(args):
     return event
 
 def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
-        verbose=False):
+        args, verbose=False):
     evtData.sender.append(rank)
 
     timeAmplitudeRaw = cookieBox.getRawSignals(evt, config.cbSourceString,
@@ -311,7 +311,13 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
     else:
         bg = np.zeros(16)
 
-    evtData.timeSignals_V = (evtData.timeSignals_V.T - bg).T
+    if (evtData.timeSignals_V is None) or (args.traceAverage is not None):
+        evtData.timeSignals_V = (evtData.timeSignals_V.T - bg).T
+    else:
+        evtData.timeSignals_V *= (1 - args.traceAverage)
+        evtData.timeSignals_V += ((evtData.timeSignals_V.T - bg).T *
+                args.traceAverage)
+        
  
     if rank == 0:
         # Grab the y data
@@ -802,7 +808,7 @@ def main(args, verbose=False):
                 evt = events.next()
 
                 appendEventData(evt, eventData, config, scales, detCalib,
-                        masterLoop if rank==0 else None, verbose=verbose)
+                        masterLoop if rank==0 else None, args, verbose=verbose)
 
                 appendEpicsData(epics, eventData)
 
