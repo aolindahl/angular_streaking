@@ -290,8 +290,10 @@ def eventDataContainer(args):
 
     return event
 
+oldTraces = None
 def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
         args, verbose=False):
+    global oldTraces
     evtData.sender.append(rank)
 
     timeAmplitudeRaw = cookieBox.getRawSignals(evt, config.cbSourceString,
@@ -308,16 +310,17 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
         bg = -(scales.scaling_VperCh * 
                 timeAmplitudeRaw[:,scales.baselineSlice].T -
                 scales.offset_V).mean(axis=0)
-    else:
-        bg = np.zeros(16)
+        evtData.timeSignals_V -= bg.reshape(-1,1)
 
-    if (evtData.timeSignals_V is None) or (args.traceAverage is not None):
-        evtData.timeSignals_V = (evtData.timeSignals_V.T - bg).T
-    else:
-        evtData.timeSignals_V *= (1 - args.traceAverage)
-        evtData.timeSignals_V += ((evtData.timeSignals_V.T - bg).T *
-                args.traceAverage)
+    if (oldTraces is not None) and (args.traceAverage is not None):
+        evtData.timeSignals_V *= args.traceAverage
+        evtData.timeSignals_V += (oldTraces * (1. - args.traceAverage))
         
+    if (args.traceAverage is not None) and (evtData.timeSignals_V is not None):
+        oldTraces = evtData.timeSignals_V.copy()
+    else:
+        oldTraces = None
+
  
     if rank == 0:
         # Grab the y data
@@ -326,6 +329,7 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
             pass
         else:
             evtData.timeSignalsFiltered_V = evtData.timeSignals_V
+
         evtData.timeAmplitudeRoi0 = [t[s] for t, s in
                 zip(evtData.timeSignalsFiltered_V, scales.tRoi0S)]
         evtData.timeAmplitudeRoi1 = [t[s] for t, s in
