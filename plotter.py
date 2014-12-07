@@ -227,6 +227,7 @@ def mainPlotter(args, verbose=False):
 
                 ax.relim()
                 ax.autoscale_view()
+                ax.set_ylim(-0.05, 0.2)
 
             figs[0].canvas.draw()
 
@@ -246,8 +247,6 @@ def mainPlotter(args, verbose=False):
 
             ax.relim()
             ax.autoscale_view()
-
-            ax.figure.canvas.draw()
 
 
         #Timing plot
