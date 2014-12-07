@@ -88,10 +88,18 @@ def parse():
     parser.add_argument(
             '-tA',
             '--traceAverage',
-            type = float,
-            metavar = 'WEIGHT',
+            type = int,
+            metavar = 'N',
             default = None,
             help = ('Moving average of the tracec with weight on last point'))
+
+    parser.add_argument(
+            '-tAFee',
+            type = float,
+            metavar = 'threshold_mJ',
+            default = 0.0,
+            help = ('Threshold for the pulse energy to be used in the'
+                + ' averaging.'))
 
     parser.add_argument(
             '--roi1Average',

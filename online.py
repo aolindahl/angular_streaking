@@ -79,6 +79,8 @@ s += nEvr
 
 dSize = s
 
+dTraces = None
+
 
 def connectToDataSource(args, config, verbose=False):
     # If online
@@ -180,14 +182,17 @@ def saveDetectorCalibration(masterLoop, detCalib, config, verbose=False, beta=0)
     np.savetxt(calibFile, factors)
           
 
-def masterDataSetup(masterData):
+def masterDataSetup(masterData, args):
     # Container for the master data
     masterData.energySignal_V = None
-    masterData.timeSignals_V = None
     masterData.timeSignalseFiltered_V = None
+    N = args.traceAverage
+    if N == None:
+        N = 1
+    masterData.traceBuffer = deque([], N)
 
     
-def masterLoopSetup(args):
+def masterLoopSetup(args, scales):
     # Master loop data collector
     masterLoop = aolUtil.struct()
     # Define the plot interval from the command line input
@@ -216,6 +221,9 @@ def masterLoopSetup(args):
 
 
 def getScales(env, config, verbose=False):
+    global dSize
+    global dTraces 
+
     scales = aolUtil.struct()
     # Grab the relevant scales
     scales.energy_eV = (config.energyScaleBinLimits[:-1] +
@@ -247,6 +255,9 @@ def getScales(env, config, verbose=False):
 
     scales.scaling_VperCh, scales.offset_V = cookieBox.getSignalScaling(env, config.cbSourceString,
             verbose=verbose)
+
+    dTraces = slice(dSize, dSize + 16*len(scales.time_us))
+    dSize += 16*len(scales.time_us)
 
     return scales
 
@@ -288,12 +299,12 @@ def eventDataContainer(args):
     event.fsTiming = []
     event.ttTime = []
 
+    event.timeSignals_V = []
+
     return event
 
-oldTraces = None
 def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
         args, verbose=False):
-    global oldTraces
     evtData.sender.append(rank)
 
     timeAmplitudeRaw = cookieBox.getRawSignals(evt, config.cbSourceString,
@@ -301,26 +312,16 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
 
     if timeAmplitudeRaw is None:
         timeAmplitudeRaw = np.zeros((16,1))
-        evtData.timeSignals_V = np.zeros((16, len(scales.time_us)))
+        evtData.timeSignals_V.append( np.zeros((16, len(scales.time_us))) )
     else:
-        evtData.timeSignals_V = -(scales.scaling_VperCh *
-                timeAmplitudeRaw[:,scales.timeSlice].T - scales.offset_V).T
+        evtData.timeSignals_V.append( -(scales.scaling_VperCh *
+                timeAmplitudeRaw[:,scales.timeSlice].T - scales.offset_V).T )
 
     if config.baselineSubtraction == 'early':
         bg = -(scales.scaling_VperCh * 
                 timeAmplitudeRaw[:,scales.baselineSlice].T -
                 scales.offset_V).mean(axis=0)
-        evtData.timeSignals_V -= bg.reshape(-1,1)
-
-    if (oldTraces is not None) and (args.traceAverage is not None):
-        evtData.timeSignals_V *= args.traceAverage
-        evtData.timeSignals_V += (oldTraces * (1. - args.traceAverage))
-        
-    if (args.traceAverage is not None) and (evtData.timeSignals_V is not None):
-        oldTraces = evtData.timeSignals_V.copy()
-    else:
-        oldTraces = None
-
+        evtData.timeSignals_V[-1] -= bg.reshape(-1,1)
  
     if rank == 0:
         # Grab the y data
@@ -328,7 +329,7 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
             #evtData.timeSignalsFiltered_V = cb.getTimeAmplitudesFiltered()
             pass
         else:
-            evtData.timeSignalsFiltered_V = evtData.timeSignals_V
+            evtData.timeSignalsFiltered_V = evtData.timeSignals_V[-1]
 
         evtData.timeAmplitudeRoi0 = [t[s] for t, s in
                 zip(evtData.timeSignalsFiltered_V, scales.tRoi0S)]
@@ -346,7 +347,7 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
         masterLoop.nProcessed += 1
 
     evtData.full.append(
-            np.array([ sig.sum() for sig in evtData.timeSignals_V ]) *
+            np.array([ sig.sum() for sig in evtData.timeSignals_V[-1] ]) *
             detCalib.factors * config.nanFitMask)
 
 
@@ -354,7 +355,7 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
     evtData.intRoi0.append(
             np.array([ sig[sl].sum() - sig[slBg].sum() * fact
                 for sig, sl, slBg, fact in zip(
-                    evtData.timeSignals_V,
+                    evtData.timeSignals_V[-1],
                     scales.tRoi0S,
                     scales.tRoi0BgS,
                     scales.tRoi0BgFactors) ]) * detCalib.factors * config.nanFitMask)
@@ -362,7 +363,7 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
     
     evtData.intRoi1.append(
             np.array([ sig[sl].sum() for sig, sl in zip(
-                evtData.timeSignals_V,
+                evtData.timeSignals_V[-1],
                 scales.tRoi1S) ]) * detCalib.factors)
 
     # Get the initial fit parameters
@@ -463,6 +464,9 @@ def packageAndSendData(evtData, req, verbose=False):
     # Photon energy
     if args.photonEnergy != 'no':
         data[dEnergy] = evtData.energy[0]
+    # Traces
+    data[dTraces] = np.array(evtData.timeSignals_V).reshape(-1)
+    #print data[dTraces]
 
     # e-beam data
     data[dEL3] = evtData.ebEnergyL3[0]
@@ -489,7 +493,9 @@ def packageAndSendData(evtData, req, verbose=False):
     return req
 
  
-def mergeMasterAndWorkerData(evtData, masterLoop, args):
+def mergeMasterAndWorkerData(evtData, masterLoop, args, verbose=False):
+    if verbose:
+        print 'Merging master and worker data.'
     # Unpack the data
     evtData.sender = np.array( evtData.sender + [ d[dRank] for d in
         masterLoop.arrived ])
@@ -511,6 +517,9 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args):
     if args.calibrate > -1:
         masterLoop.calibValues.append(evtData.intRoi0 if args.calibrate==0 else
                 evtData.intRoi1)
+    #print masterLoop.arrived[-1][dTraces].reshape(16,-1)
+    evtData.timeSignals_V = np.array( evtData.timeSignals_V +
+            [d[dTraces].reshape(16,-1) for d in masterLoop.arrived ] )
 
     #evtData.positions = np.array( evtData.positions ) 
 
@@ -529,13 +538,21 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args):
         in masterLoop.arrived ])
     evtData.fsTiming = np.array( evtData.fsTiming + [ d[dFsTiming] for d in
         masterLoop.arrived ])
-    evtData.ttTime = np.array( evtData.ttTime + [ d[dTtTime] for d in
-        masterLoop.arrived ])
+    evtData.ttTime = np.array( evtData.ttTime + [ d[dTtTime] for
+        d in masterLoop.arrived ] )
 
     # delete the recived data buffers
     for i in range(masterLoop.nArrived):
         masterLoop.buf.popleft()
         masterLoop.req.popleft()
+    
+
+    for i in range( len( evtData.gasDet ) ):
+        if evtData.gasDet[i].mean() > args.tAFee:
+            evtData.traceBuffer.append(evtData.timeSignals_V[i])
+    evtData.traceAverage = np.mean(evtData.traceBuffer, axis=0)
+
+        
 
 # lists for the reference information in the timing histogram
 nShotsRef = 1000
@@ -614,7 +631,7 @@ def makeTimingHistogram(evtData):
             'roi0' : roi0Binned,
             'roi1' : roi1Binned}
 
-
+arrayType = type( np.array([0]) )
 def zmqPlotting(evtData, augerAverage, scales, zmq):
  
     # Averaging of roi 1 
@@ -641,14 +658,14 @@ def zmqPlotting(evtData, augerAverage, scales, zmq):
             'tilt':evtData.pol[-1][4],
             'linear':evtData.pol[-1][6]}
     plotData['strip'] = [evtData.fiducials, evtData.pol, evtData.full]
-    plotData['traces'] = {}
-    if evtData.timeSignals_V != None:
-        plotData['traces']['timeRaw'] = evtData.timeSignals_V
+    if type(evtData.traceAverage) == arrayType:
+        plotData['traces'] = {}
+        plotData['traces']['timeRaw'] = evtData.traceAverage
         plotData['traces']['timeFiltered'] = evtData.timeSignalsFiltered_V
         plotData['traces']['timeRoi0'] = [sig[sl] for sig, sl in
-                zip(evtData.timeSignalsFiltered_V, scales.tRoi0S)]
+                zip(evtData.traceAverage, scales.tRoi0S)]
         plotData['traces']['timeRoi1'] = [sig[sl] for sig, sl in
-                zip(evtData.timeSignalsFiltered_V, scales.tRoi1S)]
+                zip(evtData.traceAverage, scales.tRoi1S)]
         plotData['traces']['timeScale'] = [scales.time_us]*16
         plotData['traces']['timeScaleRoi0'] = [ scales.time_us[sl] for sl in
                 scales.tRoi0S ]
@@ -740,6 +757,7 @@ def closeSaveFile(file):
         pass
 
 def main(args, verbose=False):
+    verbose=args.verbose
     try:
         # Import the configuration file
         config = importConfiguration(args, verbose=verbose)
@@ -752,30 +770,7 @@ def main(args, verbose=False):
         config.nanFitMask = config.nanFitMask.astype(float)
         config.nanFitMask[np.isnan(detCalib.factors)] = np.nan
         config.boolFitMask[np.isnan(detCalib.factors)] = False
-            
-        # The master have some extra things to do
-        if rank == 0:
-            # Set up the plotting in AMO
-            from ZmqSender import zmqSender
-            zmq = zmqSender()
-    
-            masterLoop = masterLoopSetup(args) 
-
-    
-            # Averaging factor for the augers
-            augerAverage = aolUtil.struct()
-            augerAverage.fNewRoi1 = args.roi1Average
-            augerAverage.fOldRoi1 = 1. - augerAverage.fNewRoi1
-            augerAverage.plotRoi1 = None
-
-            if args.saveData != 'no':
-                saveFile = openSaveFile(args.saveData, not args.offline, config)
-            
-        else:
-            # set an empty request
-            req = None
-    
-    
+               
     
         # Connect to the correct datasource
         ds = connectToDataSource(args, config, verbose=verbose)
@@ -792,8 +787,31 @@ def main(args, verbose=False):
     
         # Get the scales that we need
         scales = getScales(ds.env(), config)
-        print scales
+        #print scales
+     
+        # The master have some extra things to do
+        if rank == 0:
+            # Set up the plotting in AMO
+            from ZmqSender import zmqSender
+            zmq = zmqSender()
     
+            masterLoop = masterLoopSetup(args, scales) 
+
+    
+            # Averaging factor for the augers
+            augerAverage = aolUtil.struct()
+            augerAverage.fNewRoi1 = args.roi1Average
+            augerAverage.fOldRoi1 = 1. - augerAverage.fNewRoi1
+            augerAverage.plotRoi1 = None
+
+            if args.saveData != 'no':
+                saveFile = openSaveFile(args.saveData, not args.offline, config)
+            
+        else:
+            # set an empty request
+            req = None
+    
+
         # The main loop that never ends...
         while 1:
             # An event data container
@@ -801,7 +819,7 @@ def main(args, verbose=False):
                 
             # The master should set up the recive requests
             if rank == 0:
-                masterDataSetup(eventData)
+                masterDataSetup(eventData, args)
                 setupRecives(masterLoop, verbose=verbose)
                
             # The master should do something usefull while waiting for the time
@@ -842,7 +860,8 @@ def main(args, verbose=False):
                 masterLoop.arrived = [b.reshape(-1) for i,b in
                         enumerate(masterLoop.buf) if i < masterLoop.nArrived]
         
-                mergeMasterAndWorkerData(eventData, masterLoop, args)
+                mergeMasterAndWorkerData(eventData, masterLoop, args,
+                        verbose=False)
 
     
                 # Send data for plotting
