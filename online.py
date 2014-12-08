@@ -435,9 +435,8 @@ def appendEpicsData(epics, evtData):
 
     # Laster to x-ray locking system timing
     fs = epics.value('LAS:FS1:VIT:FS_TGT_TIME')
-    if fs is None:
-        fs = np.nan
-    evtData.fsTiming.append( fs * 1e6 )
+    if fs is None: fs = np.nan
+    evtData.fsTiming.append( fs * 1e6)
 
     # Time tool signal
     tt = epics.value('TTSPEC:FLTPOS_PS') 
@@ -580,7 +579,9 @@ def makeTimingHistogram(evtData):
     roi0 = evtData.intRoi0.mean(axis=1) / fee
     roi1 = evtData.intRoi1.mean(axis=1) / fee
 
-    delay = evtData.delayStage + evtData.ttTime
+    #delay = evtData.delayStage + evtData.ttTime
+    delay = evtData.fsTiming
+    #delay = evtData.fsTiming - 4.61802e9
     
     nanMask = ~ ( np.isnan(fee)
             | np.isnan(full)
@@ -613,10 +614,13 @@ def makeTimingHistogram(evtData):
     if len(tBuff) == 0:
         return
 
-    binSize = 20.
-    binEdgeMin = np.floor( np.min(tBuff) / binSize )
-    binEdgeMax = np.ceil( np.max(tBuff) / binSize )
-    binEdges = np.arange(binEdgeMin, binEdgeMax + 1) * binSize
+    binSize = 10
+    #print tBuff
+    binEdgeMin = np.floor( float(np.min(tBuff)) / binSize )
+    binEdgeMax = np.ceil( float(np.max(tBuff)) / binSize )
+    #print binEdgeMin, binEdgeMax
+    binEdges = np.arange(binEdgeMin, binEdgeMax + 2) * binSize
+    #print binEdges
     timeBins = binEdges[:-1] + np.diff( binEdges ) / 2
 
     fullBinned, _, _ =  binned_statistic(tBuff, fullBuff, statistic='mean',
@@ -630,6 +634,25 @@ def makeTimingHistogram(evtData):
             'full' : fullBinned,
             'roi0' : roi0Binned,
             'roi1' : roi1Binned}
+
+
+l3BuffLen = 1000
+l3Buff = deque([], l3BuffLen)
+l3SigBuff = deque([], l3BuffLen)
+def l3Plot(evtData):
+    fee = evtData.gasDet[:,2:].mean(axis=1)
+    full = evtData.full.mean(axis=1) / fee
+    #roi0 = evtData.intRoi0.mean(axis=1) / fee
+    #roi1 = evtData.intRoi1.mean(axis=1) / fee
+
+    I = fee > 0.005
+    
+    l3Buff.extend(evtData.ebEnergyL3[I])
+    l3SigBuff.extend(full[I]/fee[I])
+    
+
+    return {'l3':np.array(l3Buff),
+            'signal':np.array(l3SigBuff)}
 
 arrayType = type( np.array([0]) )
 def zmqPlotting(evtData, augerAverage, scales, zmq):
@@ -688,6 +711,8 @@ def zmqPlotting(evtData, augerAverage, scales, zmq):
 
     plotData['timeHist'] = makeTimingHistogram(evtData)
     #print  plotData['timeHist']
+
+    plotData['l3Plot'] = l3Plot(evtData)
 
     zmq.sendObject(plotData)
                 

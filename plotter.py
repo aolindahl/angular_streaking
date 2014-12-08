@@ -264,7 +264,25 @@ def mainPlotter(args, verbose=False):
                 figs[4].axes[0].autoscale_view()
 
                 figs[4].canvas.draw()
+                
+        # L3 plot
+        plotKey = 'l3Plot'
+        if plotKey in data.keys():
+            if verbose:
+                print 'Update L3 plot.'
+            plotData = data[plotKey]
+
+            if plotData is not None:
+                ax = figs[5].axes[0]
+                l = ax.lines[0]
+                l.set_xdata(plotData['l3'])
+                l.set_ydata(plotData['signal'])
             
+                ax.relim()
+                ax.autoscale_view()
+
+
+            figs[5].canvas.draw()
 
 
     def initializePlot():
@@ -337,7 +355,17 @@ def mainPlotter(args, verbose=False):
         fig5.axes[0].plot([], [], 'g.')
         fig5.show()
 
-        return [fig1, fig2, fig3, fig4, fig5]
+
+        # L3 plot
+        fig6 = plt.figure('L3 plot')
+        fig6.add_subplot(111)
+        fig6.axes[0].plot([], [], '.')
+        fig6.axes[0].set_xlabel('L3 energy (MeV)')
+        fig6.axes[0].set_ylabel('Signal/FEE')
+        fig6.show()
+
+
+        return [fig1, fig2, fig3, fig4, fig5, fig6]
         
     figs = initializePlot()
     
