@@ -4,7 +4,7 @@ import numpy as np
 def parse():
     parser = argparse.ArgumentParser(
             description =
-            'Argument parser for the cookie box DELTA comissioning support')
+            'Argument parser for the angular straking experiment.')
 
 
     parser.add_argument(
@@ -71,10 +71,10 @@ def parse():
             '--configuration',
             type = str,
             metavar = 'FILENAME',
-            default = 'aolPyModules/cookieBoxDefaultConfig.py',
+            default = 'aolPyModules/cookie_box_default_config.py',
             help = ('Name of the module containing the configuration' +
                 'information for the analysis. Default = ' +
-                '"cookieBoxDefaultConfig.py"'))
+                '"cookie_box_default_config.py"'))
 
     parser.add_argument(
             '--gainCalib',

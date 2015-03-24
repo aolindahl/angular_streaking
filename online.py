@@ -15,26 +15,26 @@ import os.path
 import lmfit
 from scipy.stats import binned_statistic
 
-
-#############
-# LCLS modules
-import psana
-
-
 ############
 # Custom modules
 # Soume found in:
 sys.path.append( os.path.dirname(os.path.abspath(__file__)) +  '/aolPyModules')
-import cookieBox
+import cookie_box
 import tof
 import aolUtil
 import lcls
 import arguments
+import simplepsana
 
 # Set up the mpi cpmmunication
 world = MPI.COMM_WORLD
 rank = world.Get_rank()
 worldSize = world.Get_size()
+
+if rank == 0:
+    from psmon import publish
+    from psmon.plots import XYPlot, MultiPlot
+    publish.init()
 
 c_0_mm_per_fs = 2.99792458e8 * 1e3 * 1e-15
 # http://physics.nist.gov/cgi-bin/cuu/Value?c|search_for=universal_in! 2014-04-21
@@ -55,8 +55,8 @@ dIntRoi0 = slice(s, s+16)
 s += 16
 dIntRoi1 = slice(s, s+16)
 s += 16
-dPol = slice(s, s+8)
-s += 8
+#dPol = slice(s, s+8)
+#s += 8
 dEnergy = slice(s, s+2)
 s += 2
 dEL3 = s
@@ -82,13 +82,13 @@ dSize = s
 dTraces = None
 
 
-def connectToDataSource(args, config, verbose=False):
+def connect_to_data_source(args, config, verbose=False):
     # If online
     if not args.offline:
         # make the shared memory string
         dataSource = 'shmem=AMO.0:stop=no'
     else:
-        dataSource = config.offlineSource
+        dataSource = config.offline_source
         #config.makeTofConfigList(online=False)
         if verbose:
             print config
@@ -101,10 +101,10 @@ def connectToDataSource(args, config, verbose=False):
                 host,
                 dataSource)
 
-    return psana.DataSource(dataSource)
+    return simplepsana.get_data_source(dataSource)
 
 
-def importConfiguration(args, verbose=False):
+def import_configuration(args, verbose=False):
     # Import the correct configuration module    
     confPath, confFileName = os.path.split(args.configuration)
     sys.path.append(confPath)
@@ -159,12 +159,12 @@ def saveDetectorCalibration(masterLoop, detCalib, config, verbose=False, beta=0)
     calibValues = np.concatenate(masterLoop.calibValues, axis=0)
     average = calibValues.mean(axis=0)
     #factors = average[config.boolFitMask].max()/average
-    params = cookieBox.initialParams()
+    params = cookie_box.initial_params()
     params['A'].value = 1
     params['beta'].value = beta
     params['tilt'].value = 0
     params['linear'].value = 1
-    factors = cookieBox.modelFunction(params, np.radians(np.arange(0, 360,
+    factors = cookie_box.model_function(params, np.radians(np.arange(0, 360,
         22.5))) * float(average.max()) / average
     factors[~config.boolFitMask] = np.nan
     
@@ -182,7 +182,7 @@ def saveDetectorCalibration(masterLoop, detCalib, config, verbose=False, beta=0)
     np.savetxt(calibFile, factors)
           
 
-def masterDataSetup(masterData, args):
+def master_data_setup(masterData, args):
     # Container for the master data
     masterData.energySignal_V = None
     masterData.timeSignalseFiltered_V = None
@@ -192,7 +192,7 @@ def masterDataSetup(masterData, args):
     masterData.traceBuffer = deque([], N)
 
     
-def masterLoopSetup(args, scales):
+def master_loop_setup(args, scales):
     # Master loop data collector
     masterLoop = aolUtil.struct()
     # Define the plot interval from the command line input
@@ -220,59 +220,51 @@ def masterLoopSetup(args, scales):
     return masterLoop
 
 
-def getScales(env, config, verbose=False):
+def get_scales(env, cb, verbose=False):
     global dSize
     global dTraces 
 
     scales = aolUtil.struct()
     # Grab the relevant scales
-    scales.energy_eV = (config.energyScaleBinLimits[:-1] +
-            np.diff(config.energyScaleBinLimits)/2)
-    scales.eRoi0S = slice(
-            scales.energy_eV.searchsorted(np.min(config.energyRoi0_eV_common)),
-            scales.energy_eV.searchsorted(np.max(config.energyRoi0_eV_common)))
-    scales.energyRoi0_eV = scales.energy_eV[scales.eRoi0S]
+    scales.energy_eV = cb.get_energy_scales_eV()[0]
+    #scales.e_roi_0_s = slice(
+    #        scales.energy_eV.searchsorted(np.min(config.energy_roi_0_eV_common)),
+    #        scales.energy_eV.searchsorted(np.max(config.energy_roi_0_eV_common)))
+    scales.energy_roi_0_eV = cb.get_energy_scales_eV(roi=0)[0]
+
+    #raw_time_scales = cb.get_time_scales_us()
+
+    #scales.baseline_slices = cookie_box.slice_from_range(
+    #        raw_time_scales, [-np.inf, config.baselineEnd_us])
+
     
-    tempTime = tof.getTimeScale_us(env, config.cbSourceString, verbose=verbose)
-    scales.baselineSlice = slice( tempTime.searchsorted(config.baselineEnd_us) )
-    scales.timeSlice = slice(
-            tempTime.searchsorted(config.tMin_us),
-            tempTime.searchsorted(config.tMax_us) )
-    scales.time_us = tempTime[ scales.timeSlice ]
-    scales.tRoi0S = cookieBox.sliceFromRange(scales.time_us,
-            [config.timeRoi0_us_common]*16)
-    scales.tRoi0BgS = cookieBox.sliceFromRange(scales.time_us,
-            [config.timeRoi0Bg_us_common]*16)
-    scales.tRoi0BgFactors = np.array([np.float(s.stop-s.start)/(bg.stop-bg.start) for
-        s,bg in zip(scales.tRoi0S, scales.tRoi0BgS)])
-    scales.tRoi1S = cookieBox.sliceFromRange(scales.time_us,
-            [config.timeRoi1_us_common]*16)
-    scales.timeRoi0_us = [scales.time_us[s] for s in scales.tRoi0S]
-    scales.timeRoiBg0_us = [scales.time_us[s] for s in scales.tRoi0BgS]
-    scales.timeRoi1_us = [scales.time_us[s] for s in scales.tRoi1S]
-    scales.angles = cookieBox.phiRad
+    scales.time_us = cb.get_time_scales_us()
+    scales.timeRoi0_us = cb.get_time_scales_us(roi=0)
+    #scales.timeRoiBg0_us = [scales.time_us[s] for s in scales.tRoi0BgS]
+    scales.timeRoi1_us = cb.get_time_scales_us(roi=1)
+    scales.angles = cookie_box.phi_rad
     scales.anglesFit = np.linspace(0, 2*np.pi, 100)
 
-    scales.scaling_VperCh, scales.offset_V = cookieBox.getSignalScaling(env, config.cbSourceString,
-            verbose=verbose)
 
-    dTraces = slice(dSize, dSize + 16*len(scales.time_us))
-    dSize += 16*len(scales.time_us)
+    # These are the globals
+    traces_size = 16 * np.max([len(t) for t in scales.time_us])
+    dTraces = slice(dSize, dSize + traces_size)
+    dSize += traces_size
 
     return scales
 
-def setupRecives(masterLoop, verbose=False): 
+def setup_receives(masterLoop, verbose=False): 
     # Set up the requests for recieving data
     while len(masterLoop.buf) < masterLoop.bufSize:
         masterLoop.buf.append(masterLoop.bufTemplate.copy())
         masterLoop.req.append(world.Irecv([masterLoop.buf[-1], MPI.FLOAT],
-            source=MPI.ANY_SOURCE))
+                              source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG))
     if verbose:
-        print 'master set up for', len(masterLoop.buf), 'non blocking recives'
+        print 'master set up for', len(masterLoop.buf), 'non blocking receives.'
     # Counter for the processed evets
     masterLoop.nProcessed = 0
 
-def eventDataContainer(args):
+def event_data_container(args):
     # Set up some data containers
     event = aolUtil.struct()
     event.sender = []
@@ -282,7 +274,7 @@ def eventDataContainer(args):
     event.intRoi0 = []
     event.intRoi0Bg = []
     event.intRoi1 = []
-    event.pol = []
+    #event.pol = []
     #event.positions = []
 
     event.ebEnergyL3 = []
@@ -303,101 +295,108 @@ def eventDataContainer(args):
 
     return event
 
-def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
-        args, verbose=False):
+def append_event_data(evt, evtData, config, scales, detCalib, masterLoop,
+        cb, args, verbose=False):
     evtData.sender.append(rank)
 
-    timeAmplitudeRaw = cookieBox.getRawSignals(evt, config.cbSourceString,
-            verbose=False)
+    cb.set_raw_data(evt)
+    time_amplitudes = cb.get_time_amplitudes()
 
-    if timeAmplitudeRaw is None:
-        timeAmplitudeRaw = np.zeros((16,1))
-        evtData.timeSignals_V.append( np.zeros((16, len(scales.time_us))) )
+    if None in time_amplitudes:
+        #time_amplitudes = np.zeros((16,1))
+        data = False
+        evtData.timeSignals_V.append(
+                [np.zeros_like(t) for t in cb.get_time_scales_us()])
     else:
-        evtData.timeSignals_V.append( -(scales.scaling_VperCh *
-                timeAmplitudeRaw[:,scales.timeSlice].T - scales.offset_V).T )
+        data = True
+        evtData.timeSignals_V.append(time_amplitudes)
 
-    if config.baselineSubtraction == 'early':
-        bg = -(scales.scaling_VperCh * 
-                timeAmplitudeRaw[:,scales.baselineSlice].T -
-                scales.offset_V).mean(axis=0)
-        evtData.timeSignals_V[-1] -= bg.reshape(-1,1)
  
     if rank == 0:
         # Grab the y data
-        if 0:
-            #evtData.timeSignalsFiltered_V = cb.getTimeAmplitudesFiltered()
-            pass
+        if 1:
+            evtData.timeSignalsFiltered_V = cb.get_time_amplitudes_filtered()
         else:
             evtData.timeSignalsFiltered_V = evtData.timeSignals_V[-1]
 
-        evtData.timeAmplitudeRoi0 = [t[s] for t, s in
-                zip(evtData.timeSignalsFiltered_V, scales.tRoi0S)]
-        evtData.timeAmplitudeRoi1 = [t[s] for t, s in
-                zip(evtData.timeSignalsFiltered_V, scales.tRoi1S)]
+        evtData.timeAmplitudeRoi0 = cb.get_time_amplitudes_filtered(roi=0)
+        evtData.timeAmplitudeRoi1 = cb.get_time_amplitudes_filtered(roi=1)
 
         #evtData.energyAmplitude = np.average(cb.getEnergyAmplitudes(), axis=0)
         #evtData.energySignal = np.array(cb.getEnergyAmplitudes()[2])
         #evtData.energySignalRoi0 = \
-        #        evtData.energySignal[scales.eRoi0S]
+        #        evtData.energySignal[scales.e_roi_0_s]
 
         #if verbose:
         #    print 'Rank', rank, '(master) grabbed one event.'
         # Update the event counters
         masterLoop.nProcessed += 1
 
-    evtData.full.append(
+    if data:
+        evtData.full.append(
             np.array([ sig.sum() for sig in evtData.timeSignals_V[-1] ]) *
             detCalib.factors * config.nanFitMask)
 
+    else:
+        evtData.full.append(np.ones(16) * np.nan)
 
     # Get the intensities
-    evtData.intRoi0.append(
-            np.array([ sig[sl].sum() - sig[slBg].sum() * fact
-                for sig, sl, slBg, fact in zip(
-                    evtData.timeSignals_V[-1],
-                    scales.tRoi0S,
-                    scales.tRoi0BgS,
-                    scales.tRoi0BgFactors) ]) * detCalib.factors * config.nanFitMask)
+    #evtData.intRoi0.append(
+    #        np.array([ sig[sl].sum() - sig[slBg].sum() * fact
+    #            for sig, sl, slBg, fact in zip(
+    #                evtData.timeSignals_V[-1],
+    #                scales.tRoi0S,
+    #                scales.tRoi0BgS,
+    #                scales.tRoi0BgFactors) ]) * detCalib.factors * config.nanFitMask)
+    if data:
+        evtData.intRoi0.append(
+                np.array(cb.get_time_amplitudes_filtered(roi=0)).sum(axis=1) *
+                detCalib.factors * config.nanFitMask)
+    else:
+        evtData.intRoi0.append(np.ones(16) * np.nan)
 
     
-    evtData.intRoi1.append(
-            np.array([ sig[sl].sum() for sig, sl in zip(
-                evtData.timeSignals_V[-1],
-                scales.tRoi1S) ]) * detCalib.factors)
+    #evtData.intRoi1.append(
+    #        np.array([ sig[sl].sum() for sig, sl in zip(
+    #            evtData.timeSignals_V[-1],
+    #            scales.tRoi1S) ]) * detCalib.factors)
+    if data:
+        evtData.intRoi1.append(
+                np.sum(cb.get_time_amplitudes_filtered(roi=1), axis=1) *
+                detCalib.factors)
 
     # Get the initial fit parameters
-    #params = cookieBox.initialParams(evtData.intRoi0[-1])
-    params = cookieBox.initialParams()
-    params['A'].value, params['linear'].value, params['tilt'].value = \
-            cookieBox.proj.solve(evtData.intRoi0[-1], args.beta)
+    #params = cookie_box.initial_params(evtData.intRoi0[-1])
+    #params = cookie_box.initial_params()
+    #params['A'].value, params['linear'].value, params['tilt'].value = \
+    #        cookie_box.proj.solve(evtData.intRoi0[-1], args.beta)
     # Lock the beta parameter. To the command line?
-    params['beta'].value = args.beta
-    params['beta'].vary = False
+    #params['beta'].value = args.beta
+    #params['beta'].vary = False
 
     #print params['A'].value, params['linear'].value, params['tilt'].value
     
     # Perform the fit
     #print scales.angles[config.boolFitMask]
     #print evtData.intRoi0[-1][config.boolFitMask]
-    res = lmfit.minimize(
-            cookieBox.modelFunction,
-            params,
-            args=(scales.angles[config.boolFitMask],
-                evtData.intRoi0[-1][config.boolFitMask]),
-            method='leastsq')
+    #res = lmfit.minimize(
+    #        cookie_box.model_function,
+    #        params,
+    #        args=(scales.angles[config.boolFitMask],
+    #            evtData.intRoi0[-1][config.boolFitMask]),
+    #        method='leastsq')
 
     #print params['A'].value, params['linear'].value, params['tilt'].value
     
     #lmfit.report_fit(params)
                 
     # Store the values
-    evtData.pol.append(np.array( [
-        params['A'].value, params['A'].stderr,
-        params['beta'].value, params['beta'].stderr,
-        params['tilt'].value, params['tilt'].stderr,
-        params['linear'].value, params['linear'].stderr
-        ]))
+    #evtData.pol.append(np.array( [
+    #    params['A'].value, params['A'].stderr,
+    #    params['beta'].value, params['beta'].stderr,
+    #    params['tilt'].value, params['tilt'].stderr,
+    #    params['linear'].value, params['linear'].stderr
+    #    ]))
 
     # Beam position
     #evtData.positions.append( cb.getPositions() )
@@ -422,7 +421,7 @@ def appendEventData(evt, evtData, config, scales, detCalib, masterLoop,
     evtData.fiducials.append( lcls.getEventFiducial())
     evtData.times.append( lcls.getEventTime())
 
-def appendEpicsData(epics, evtData):
+def append_epics_data(epics, evtData):
     #evtData.deltaK.append(epics.value('USEG:UND1:3350:KACT'))
     #evtData.deltaEnc.append( np.array(
     #    [epics.value('USEG:UND1:3350:{}:ENC'.format(i)) for i in range(1,5)]))
@@ -459,12 +458,18 @@ def packageAndSendData(evtData, req, verbose=False):
     data[dIntRoi0] = evtData.intRoi0[0]
     data[dIntRoi1] = evtData.intRoi1[0]
     # polarization
-    data[dPol] = evtData.pol[0]
+    #data[dPol] = evtData.pol[0]
     # Photon energy
     if args.photonEnergy != 'no':
         data[dEnergy] = evtData.energy[0]
     # Traces
-    data[dTraces] = np.array(evtData.timeSignals_V).reshape(-1)
+    data[dTraces] = np.nan
+    length = (dTraces.stop - dTraces.start) / 16
+    start = 0
+    for t_sig in evtData.timeSignals_V[0]:
+        data[dTraces][start : start+len(t_sig)] = t_sig
+        start += length
+    #data[dTraces] = np.concatenate(evtData.timeSignals_V[0])
     #print data[dTraces]
 
     # e-beam data
@@ -481,8 +486,10 @@ def packageAndSendData(evtData, req, verbose=False):
     data[dTtTime] = evtData.ttTime[0]
 
     # wait if there is an active send request
+    t = time.time()
     if req != None:
         req.Wait()
+    #print 'Rank {} waited {} s for previous send.'.format(rank, time.time()-t)
     #copy the data to the send buffer
     evtData.buf = data.copy()
     if verbose:
@@ -492,7 +499,7 @@ def packageAndSendData(evtData, req, verbose=False):
     return req
 
  
-def mergeMasterAndWorkerData(evtData, masterLoop, args, verbose=False):
+def mergeMasterAndWorkerData(evtData, masterLoop, args, scales, verbose=False):
     if verbose:
         print 'Merging master and worker data.'
     # Unpack the data
@@ -509,7 +516,7 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args, verbose=False):
             [d[dIntRoi0] for d in masterLoop.arrived])
     evtData.intRoi1 = np.array( evtData.intRoi1 +
             [d[dIntRoi1] for d in masterLoop.arrived])
-    evtData.pol = np.array( evtData.pol + [d[dPol] for d in masterLoop.arrived])
+    #evtData.pol = np.array( evtData.pol + [d[dPol] for d in masterLoop.arrived])
     if args.photonEnergy != 'no':
         evtData.energy = np.array( evtData.energy + [d[dEnergy] for d in
             masterLoop.arrived] )
@@ -517,8 +524,9 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args, verbose=False):
         masterLoop.calibValues.append(evtData.intRoi0 if args.calibrate==0 else
                 evtData.intRoi1)
     #print masterLoop.arrived[-1][dTraces].reshape(16,-1)
-    evtData.timeSignals_V = np.array( evtData.timeSignals_V +
-            [d[dTraces].reshape(16,-1) for d in masterLoop.arrived ] )
+    for data in masterLoop.arrived:
+        evtData.timeSignals_V.append([d[:len(scale)] for d, scale in
+            zip(data[dTraces].reshape(16, -1), scales.time_us)])
 
     #evtData.positions = np.array( evtData.positions ) 
 
@@ -540,7 +548,7 @@ def mergeMasterAndWorkerData(evtData, masterLoop, args, verbose=False):
     evtData.ttTime = np.array( evtData.ttTime + [ d[dTtTime] for
         d in masterLoop.arrived ] )
 
-    # delete the recived data buffers
+    # delete the received data buffers
     for i in range(masterLoop.nArrived):
         masterLoop.buf.popleft()
         masterLoop.req.popleft()
@@ -654,53 +662,75 @@ def l3Plot(evtData):
     return {'l3':np.array(l3Buff),
             'signal':np.array(l3SigBuff)}
 
+def psmon_plotting(evtData, scales, args):
+    angles = np.arange(0, 360, 22.5)
+    traces = MultiPlot(('Single shots' if args.traceAverage in [1, None]
+                            else 'Average of {} shots'.format(
+                                args.traceAverage)),
+                       'Traces',
+                       ncols=4)
+    #print evtData.traceAverage
+    for i in range(8):
+        traces.add(XYPlot(('Single shots' if args.traceAverage in [1, None]
+                            else 'Average of {} shots'.format(
+                                args.traceAverage)),
+            '{} and {} deg'.format(angles[i], angles[i+8]),
+            [scales.time_us[i] * 1e-6, scales.time_us[i+8] * 1e-6],
+            [evtData.traceAverage[i], evtData.traceAverage[i+8]],
+            xlabel={'axis_title': 'time', 'axis_units': 's'},
+            ylabel={'axis_title': 'signal', 'axis_units': 'V'},
+            formats=['r-', 'b-']))
+
+    publish.send('time_traces', traces)
+
+
 arrayType = type( np.array([0]) )
 def zmqPlotting(evtData, augerAverage, scales, zmq):
  
     # Averaging of roi 1 
-    if augerAverage.fOldRoi1 != 0:
-        if augerAverage.plotRoi1 is None:
-            augerAverage.plotRoi1 = evtData.intRoi1[0,:]
-        else:
-            augerAverage.plotRoi1 *= augerAverage.fOldRoi1
-            augerAverage.plotRoi1 += augerAverage.fNewRoi1 \
-                    * evtData.intRoi1[0,:]
-        for r1 in evtData.intRoi1[1:,:]:
-            augerAverage.plotRoi1 *= augerAverage.fOldRoi1
-            augerAverage.plotRoi1 += augerAverage.fNewRoi1 \
-                    * evtData.intRoi1[0,:]
-    else:
-        augerAverage.plotRoi1 = evtData.intRoi1[-1,:]
+    #if augerAverage.fOldRoi1 != 0:
+    #    if augerAverage.plotRoi1 is None:
+    #        augerAverage.plotRoi1 = evtData.intRoi1[0,:]
+    #    else:
+    #        augerAverage.plotRoi1 *= augerAverage.fOldRoi1
+    #        augerAverage.plotRoi1 += augerAverage.fNewRoi1 \
+    #                * evtData.intRoi1[0,:]
+    #    for r1 in evtData.intRoi1[1:,:]:
+    #        augerAverage.plotRoi1 *= augerAverage.fOldRoi1
+    #        augerAverage.plotRoi1 += augerAverage.fNewRoi1 \
+    #                * evtData.intRoi1[0,:]
+    #else:
+    #    augerAverage.plotRoi1 = evtData.intRoi1[-1,:]
     plotData = {}
-    plotData['polar'] = {
-            'full':evtData.full[-1],
-            'roi0':evtData.intRoi0[-1,:],
-            'roi1':augerAverage.plotRoi1,
-            'A':evtData.pol[-1][0],
-            'beta':evtData.pol[-1][2],
-            'tilt':evtData.pol[-1][4],
-            'linear':evtData.pol[-1][6]}
-    plotData['strip'] = [evtData.fiducials, evtData.pol, evtData.full]
+    #plotData['polar'] = {
+    #        'full':evtData.full[-1],
+    #        'roi0':evtData.intRoi0[-1,:],
+    #        'roi1':augerAverage.plotRoi1,
+    #        'A':evtData.pol[-1][0],
+    #        'beta':evtData.pol[-1][2],
+    #        'tilt':evtData.pol[-1][4],
+    #        'linear':evtData.pol[-1][6]}
+    #plotData['strip'] = [evtData.fiducials, evtData.pol, evtData.full]
     if type(evtData.traceAverage) == arrayType:
         plotData['traces'] = {}
         plotData['traces']['timeRaw'] = evtData.traceAverage
         plotData['traces']['timeFiltered'] = evtData.timeSignalsFiltered_V
-        plotData['traces']['timeRoi0'] = [sig[sl] for sig, sl in
-                zip(evtData.traceAverage, scales.tRoi0S)]
-        plotData['traces']['timeRoi1'] = [sig[sl] for sig, sl in
-                zip(evtData.traceAverage, scales.tRoi1S)]
-        plotData['traces']['timeScale'] = [scales.time_us]*16
-        plotData['traces']['timeScaleRoi0'] = [ scales.time_us[sl] for sl in
-                scales.tRoi0S ]
-        plotData['traces']['timeScaleRoi1'] = [ scales.time_us[sl] for sl in
-                scales.tRoi1S ]
+    #    plotData['traces']['timeRoi0'] = [sig[sl] for sig, sl in
+    #            zip(evtData.traceAverage, scales.tRoi0S)]
+    #    plotData['traces']['timeRoi1'] = [sig[sl] for sig, sl in
+    #            zip(evtData.traceAverage, scales.tRoi1S)]
+    #    plotData['traces']['timeScale'] = [scales.time_us]*16
+    #    plotData['traces']['timeScaleRoi0'] = [ scales.time_us[sl] for sl in
+    #            scales.tRoi0S ]
+    #    plotData['traces']['timeScaleRoi1'] = [ scales.time_us[sl] for sl in
+    #            scales.tRoi1S ]
     if args.photonEnergy != 'no':
         plotData['energy'] = np.concatenate(
                 [evtData.fiducials.reshape(-1,1), evtData.energy],
                 axis=1).reshape(-1)
     #plotData['spectrum'] = {}
     #plotData['spectrum']['energyScale'] = scales.energy_eV
-    #plotData['spectrum']['energyScaleRoi0'] = scales.energyRoi0_eV
+    #plotData['spectrum']['energyScaleRoi0'] = scales.energy_roi0_eV
     #plotData['spectrum']['energyAmplitude'] = evtData.energySignals
     #plotData['spectrum']['energyAmplitudeRoi0'] = \
     #        evtData.energySignals
@@ -709,10 +739,10 @@ def zmqPlotting(evtData, augerAverage, scales, zmq):
     #position data
     #plotData['positions'] = evtData.positions.mean(axis=0)
 
-    plotData['timeHist'] = makeTimingHistogram(evtData)
+    #plotData['timeHist'] = makeTimingHistogram(evtData)
     #print  plotData['timeHist']
 
-    plotData['l3Plot'] = l3Plot(evtData)
+    #plotData['l3Plot'] = l3Plot(evtData)
 
     zmq.sendObject(plotData)
                 
@@ -742,7 +772,7 @@ def openSaveFile(format, online=False, config=None):
             file.write('\tauger_{}'.format(i))
         for i in range(16):
             file.write('\tphoto_{}'.format(i))
-        file.write('\tI0\tI0_err\tbeta\tbeta_err\ttilt\ttilt_err\tlinDegree\tlinDegree_err')
+        #file.write('\tI0\tI0_err\tbeta\tbeta_err\ttilt\ttilt_err\tlinDegree\tlinDegree_err')
         #file.write('\tdeltaK')
         #for i in range(4):
         #    file.write('\tdeltaEnc{}'.format(i+1))
@@ -763,8 +793,8 @@ def writeDataToFile(file, data, format):
                 line += '\t' + repr(a)
             for a in data.intRoi0[i,:]:
                 line += '\t' + repr(a)
-            for a in data.pol[i,:]:
-                line += '\t' + repr(a)
+            #for a in data.pol[i,:]:
+            #    line += '\t' + repr(a)
             #line += '\t' + repr(data.deltaK[i])
             #for a in data.deltaEnc[i,:]:
             #    line += '\t' + repr(a)
@@ -785,8 +815,11 @@ def main(args, verbose=False):
     verbose=args.verbose
     try:
         # Import the configuration file
-        config = importConfiguration(args, verbose=verbose)
+        config = import_configuration(args, verbose=verbose)
     
+        # Make a cookie box object
+        cb = cookie_box.CookieBox(config, verbose=False)
+
         # Read the detector transmission calibrations
         detCalib = getDetectorCalibration(verbose=verbose,
                 fileName=args.gainCalib)
@@ -798,7 +831,7 @@ def main(args, verbose=False):
                
     
         # Connect to the correct datasource
-        ds = connectToDataSource(args, config, verbose=verbose)
+        ds = connect_to_data_source(args, config, verbose=False)
         events = ds.events()
 
         # Get the epics store
@@ -808,19 +841,19 @@ def main(args, verbose=False):
         # datasource is initialized enough so that the env object is avaliable.
         evt = events.next()
     
-        cookieBox.proj.setFitMask(config.boolFitMask)
     
         # Get the scales that we need
-        scales = getScales(ds.env(), config)
+        cb.setup_scales(config.energy_scale_eV, ds.env())
+        scales = get_scales(ds.env(), cb)
         #print scales
      
         # The master have some extra things to do
         if rank == 0:
             # Set up the plotting in AMO
-            from ZmqSender import zmqSender
-            zmq = zmqSender()
+            #from ZmqSender import zmqSender
+            #zmq = zmqSender()
     
-            masterLoop = masterLoopSetup(args, scales) 
+            masterLoop = master_loop_setup(args, scales) 
 
     
             # Averaging factor for the augers
@@ -835,17 +868,27 @@ def main(args, verbose=False):
         else:
             # set an empty request
             req = None
+            t1 = 0
     
+        nevent = 0
 
         # The main loop that never ends...
         while 1:
             # An event data container
-            eventData = eventDataContainer(args)
+            eventData = event_data_container(args)
                 
-            # The master should set up the recive requests
+            ## The master should set up the receive requests
+            #if rank == 0:
+            #    master_data_setup(eventData, args)
+            #    setup_receives(masterLoop, verbose=verbose)
+
             if rank == 0:
-                masterDataSetup(eventData, args)
-                setupRecives(masterLoop, verbose=verbose)
+                master_data_setup(eventData, args)
+                while time.time() < masterLoop.tStop:
+                    masterLoop.buf.append(masterLoop.bufTemplate.copy())
+                    world.Recv(
+                        [masterLoop.buf[-1], MPI.FLOAT],
+                        source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG))
                
             # The master should do something usefull while waiting for the time
             # to pass
@@ -853,11 +896,13 @@ def main(args, verbose=False):
         
                 # Get the next event
                 evt = events.next()
+                nevent+=1
+                if rank==0 and nevent%10 == 0: print '***',nevent
 
-                appendEventData(evt, eventData, config, scales, detCalib,
-                        masterLoop if rank==0 else None, args, verbose=verbose)
+                append_event_data(evt, eventData, config, scales, detCalib,
+                        masterLoop if rank==0 else None, cb, args, verbose=verbose)
 
-                appendEpicsData(epics, eventData)
+                append_epics_data(epics, eventData)
 
                 
                 # Everyone but the master goes out of the loop here
@@ -874,10 +919,10 @@ def main(args, verbose=False):
                 masterLoop.nArrived = \
                         [r.Get_status() for r in masterLoop.req].count(True)
                 if verbose:
-                    print 'master recived data from', masterLoop.nArrived, \
-                            'events'
-                    print 'with its own events it makes up', \
-                            masterLoop.nArrived + masterLoop.nProcessed
+                    print 'master received {} and processed {}'.format(
+                            masterLoop.nArrived, masterLoop.nProcessed) + \
+                          ', total {}.'.format(masterLoop.nArrived +
+                                  masterLoop.nProcessed)
                 if masterLoop.nArrived == 0 and masterLoop.nProcessed==0:
                     continue
         
@@ -886,11 +931,12 @@ def main(args, verbose=False):
                         enumerate(masterLoop.buf) if i < masterLoop.nArrived]
         
                 mergeMasterAndWorkerData(eventData, masterLoop, args,
-                        verbose=False)
+                        scales, verbose=False)
 
     
                 # Send data for plotting
-                zmqPlotting(eventData, augerAverage, scales, zmq)
+                psmon_plotting(eventData, scales, args)
+                #zmqPlotting(eventData, augerAverage, scales, zmq)
 
                 if args.saveData != 'no':
                     writeDataToFile(saveFile, eventData, args.saveData)
@@ -899,7 +945,9 @@ def main(args, verbose=False):
             else:
                 # The rest of the ranks come here after breaking out of the loop
                 # the goal is to send data to the master core.
-                req = packageAndSendData(eventData, req)
+                #print 'rank {}, t = {}.'.format(rank, time.time() - t1)
+                req = packageAndSendData(eventData, req, verbose=verbose)
+                t1 = time.time()
 
 
     except KeyboardInterrupt:
