@@ -23,19 +23,18 @@ def parse():
     #        action='store_true',
     #        help='Display to use when aligning the cookie box.')
 
-    #group1.add_argument(
     parser.add_argument(
             '--calibrate',
             default = -1,
             type = int,
             metavar='ROI')
 
-    parser.add_argument(
-            '--calibBeta',
-            default = 0,
-            type = float,
-            metavar = 'BETA',
-            help = 'Beta parameter to be used for the calibration')
+    #parser.add_argument(
+    #        '--calibBeta',
+    #        default = 0,
+    #        type = float,
+    #        metavar = 'BETA',
+    #        help = 'Beta parameter to be used for the calibration')
 
     parser.add_argument(
             '-v',
@@ -43,12 +42,12 @@ def parse():
             action='store_true',
             help = 'Print stuff describing what is going on.')
 
-    parser.add_argument(
-            '-r',
-            '--randomize',
-            action='store_true',
-            help = ('Randimize the amplitudes. Might me usefull' +
-                'when running dummy data.'))
+    #parser.add_argument(
+    #        '-r',
+    #        '--randomize',
+    #        action='store_true',
+    #        help = ('Randimize the amplitudes. Might me usefull' +
+    #            'when running dummy data.'))
 
     parser.add_argument(
             '-i',
@@ -59,12 +58,25 @@ def parse():
             help = 'Time in seconds to wait between plots. Default = 0.5 s')
 
     parser.add_argument(
-            '-b',
-            '--beta',
-            type = float,
-            default = 2,
-            help = ('Set the beta parameter used in the fitting.' +
-                'Default = 2'))
+            '--timeAmplitudesSame',
+            action='store_true',
+            default=False)
+
+    parser.add_argument(
+            '-r',
+            '--retardation',
+            metavar='VOLTAGE',
+            default=0,
+            type=float,
+            help='Retardation voltage (default=0)')
+
+    #parser.add_argument(
+    #        '-b',
+    #        '--beta',
+    #        type = float,
+    #        default = 2,
+    #        help = ('Set the beta parameter used in the fitting.' +
+    #            'Default = 2'))
 
     parser.add_argument(
             '-c',
@@ -101,39 +113,39 @@ def parse():
             help = ('Threshold for the pulse energy to be used in the'
                 + ' averaging.'))
 
-    parser.add_argument(
-            '--roi1Average',
-            type = float,
-            default = 1,
-            metavar = 'WEIGHT',
-            help = ('Averaging for the intensities in roi 1.' +
-                ' The number given is the weight of the latest point.' +
-                ' Default = None.'))
+    #parser.add_argument(
+    #        '--roi1Average',
+    #        type = float,
+    #        default = 1,
+    #        metavar = 'WEIGHT',
+    #        help = ('Averaging for the intensities in roi 1.' +
+    #            ' The number given is the weight of the latest point.' +
+    #            ' Default = None.'))
 
-    parser.add_argument(
-            '--bgAverage',
-            type = float,
-            default = 1,
-            metavar = 'WEIGHT',
-            help = ('Averaging the regions used for baseline and background'
-                + ' subtraction. Default = None.'))
+    #parser.add_argument(
+    #        '--bgAverage',
+    #        type = float,
+    #        default = 1,
+    #        metavar = 'WEIGHT',
+    #        help = ('Averaging the regions used for baseline and background'
+    #            + ' subtraction. Default = None.'))
 
-    energyShifts = {
-            'He1s':24.6,
-            'Ne1s':870.2,
-            'Ar2s':326.3
-            }
+    #energyShifts = {
+    #        'He1s':24.6,
+    #        'Ne1s':870.2,
+    #        'Ar2s':326.3
+    #        }
 
-    parser.add_argument(
-            '-pE',
-            '--photonEnergy',
-            default = 'no',
-            #metavar = 'STATE',
-            type = str,
-            choices = energyShifts.keys(),
-            help = ('Calculate photon energy information.' +
-                ' Passed value is the offset from the time of flight' +
-                ' energy scale. Default = no.'))
+    #parser.add_argument(
+    #        '-pE',
+    #        '--photonEnergy',
+    #        default = 'no',
+    #        #metavar = 'STATE',
+    #        type = str,
+    #        choices = energyShifts.keys(),
+    #        help = ('Calculate photon energy information.' +
+    #            ' Passed value is the offset from the time of flight' +
+    #            ' energy scale. Default = no.'))
 
     parser.add_argument(
             '-s',
@@ -147,8 +159,8 @@ def parse():
 
     args = parser.parse_args()
 
-    if args.photonEnergy != 'no':
-        args.energyShift = energyShifts[args.photonEnergy]
+    #if args.photonEnergy != 'no':
+    #    args.energyShift = energyShifts[args.photonEnergy]
 
     return args
 
