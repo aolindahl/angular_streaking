@@ -2,8 +2,6 @@
 # General python modules
 import sys
 from mpi4py import MPI
-#import matplotlib.pyplot as plt
-#plt.ion()
 import numpy as np
 import time
 import platform
@@ -45,20 +43,26 @@ c_0_mm_per_fs = 2.99792458e8 * 1e3 * 1e-15
 # Data definitions
 s = 0 # Data size tracker
 
-dRank = s
-s += 1
-dFiducials = s
-s += 1
-dTime = s
-s += 1
-dFull = slice(s, s+16)
+d_int_e_roi_0 = slice(s, s+16)
 s += 16
+d_int_e_roi_1 = slice(s, s+16)
+s += 16
+d_int_e_roi_2 = slice(s, s+16)
+s += 16
+d_int_e_roi_3 = slice(s, s+16)
+s += 16
+#dRank = s
+#s += 1
+#dFiducials = s
+#s += 1
+#dTime = s
+#s += 1
+#dFull = slice(s, s+16)
+#s += 16
 dIntRoi0 = slice(s, s+16)
 s += 16
 dIntRoi1 = slice(s, s+16)
 s += 16
-#dPol = slice(s, s+8)
-#s += 8
 dEnergy = slice(s, s+2)
 s += 2
 dEL3 = s
@@ -269,37 +273,6 @@ def get_scales(env, cb, verbose=False):
     return scales
 
 
-def event_data_container(args):
-    # Set up some data containers
-    evtData = aolUtil.struct()
-    evtData.sender = []
-    evtData.fiducials = []
-    evtData.times = []
-    evtData.full = []
-    evtData.intRoi0 = []
-    evtData.intRoi0Bg = []
-    evtData.intRoi1 = []
-    #evtData.pol = []
-    #evtData.positions = []
-
-    evtData.ebEnergyL3 = []
-    evtData.gasDet = []
-
-    #if args.photonEnergy != 'no':
-    #    evtData.energy = []
-
-    evtData.evrCodes = []
-
-    #evtData.deltaK = []
-    #evtData.deltaEnc = []
-    evtData.delayStage = []
-    evtData.fsTiming = []
-    evtData.ttTime = []
-
-    evtData.timeSignals_V = []
-
-    return evtData
-
 def get_event_data(config, scales, detCalib,
         cb, args, epics, verbose=False):
     data = np.zeros(dSize, dtype=float)
@@ -342,6 +315,18 @@ def get_event_data(config, scales, detCalib,
     #print d_energy_traces
     #print data.shape
     data[d_energy_traces] = np.array(cb.get_energy_amplitudes()).reshape(-1)
+
+    data[d_int_e_roi_0] = cb.get_intensity_distribution(rois=0,
+                                                        domain='Energy')
+    data[d_int_e_roi_1] = cb.get_intensity_distribution(rois=1,
+                                                        domain='Energy')
+    data[d_int_e_roi_2] = cb.get_intensity_distribution(rois=2,
+                                                        domain='Energy')
+    data[d_int_e_roi_3] = cb.get_intensity_distribution(rois=3,
+                                                        domain='Energy')
+
+    #def get_intensity_distribution(self, rois=[slice(None)]*16,
+    #        domain='Time', verbose=None, detFactors=[1]*16):
 
     # Get the initial fit parameters
     #params = cookie_box.initial_params(evtData.intRoi0[-1])
@@ -386,7 +371,7 @@ def get_event_data(config, scales, detCalib,
     #            )
 
     # Get lcls parameters
-    #evtData.ebEnergyL3.append(lcls.getEBeamEnergyL3_MeV())
+    data[dEL3] = lcls.getEBeamEnergyL3_MeV()
     data[dFEE] = lcls.getPulseEnergy_mJ()
     #evrCodes = np.array(lcls.getEvrCodes(verbose=False))
     #evrCodes.resize(nEvr)
@@ -407,6 +392,7 @@ def get_event_data(config, scales, detCalib,
     #evtData.delayStage.append( - stage * 2 / c_0_mm_per_fs )
 
     ## Laster to x-ray locking system timing
+    data[dFsTiming] = epics.value('LAS:FS1:VIT:FS_TGT_TIME')
     #fs = epics.value('LAS:FS1:VIT:FS_TGT_TIME')
     #if fs is None: fs = np.nan
     #evtData.fsTiming.append( fs * 1e6)
@@ -430,7 +416,6 @@ def get_event_data(config, scales, detCalib,
     #    data[dEnergy] = evtData.energy[0]
 
     # e-beam data
-    #data[dEL3] = evtData.ebEnergyL3[0]
     #print 'rank {} with gasdets: {}'.format(rank, repr(evtData.gasDet[0]))
     
     #data[dEvr] = evtData.evrCodes[0]
@@ -464,8 +449,8 @@ def merge_arrived_data(data, masterLoop, args, scales, verbose=False):
     #data.times = [ d[dTime] for d in masterLoop.buf ]
         
     #data.full = [d[dFull] for d in masterLoop.buf]
-    data.intRoi0 = [d[dIntRoi0] for d in masterLoop.buf]
-    #data.intRoi1 = [d[dIntRoi1] for d in masterLoop.buf]
+    data.intRoi0 = np.array([d[dIntRoi0] for d in masterLoop.buf])
+    data.intRoi1 = np.array([d[dIntRoi1] for d in masterLoop.buf])
 
     #if args.photonEnergy != 'no':
     #    data.energy = np.array( data.energy + [d[dEnergy] for d in
@@ -482,11 +467,15 @@ def merge_arrived_data(data, masterLoop, args, scales, verbose=False):
     data.energy_signals = [d[d_energy_traces].reshape(16, -1) for
                            d in masterLoop.buf]
 
+    data.int_e_roi_0 = np.array([d[d_int_e_roi_0] for d in masterLoop.buf])
+    data.int_e_roi_1 = np.array([d[d_int_e_roi_1] for d in masterLoop.buf])
+    data.int_e_roi_2 = np.array([d[d_int_e_roi_2] for d in masterLoop.buf])
+    data.int_e_roi_3 = np.array([d[d_int_e_roi_3] for d in masterLoop.buf])
+
     #data.positions = np.array( data.positions ) 
 
-    #data.ebEnergyL3 = np.array( data.ebEnergyL3 + [ d[dEL3] for d in
-    #    masterLoop.buf ])
-    data.gasDet = [d[dFEE] for d in masterLoop.buf]
+    data.ebEnergyL3 = np.array([d[dEL3] for d in  masterLoop.buf ])
+    data.gasDet = np.array([d[dFEE] for d in masterLoop.buf])
     #data.evrCodes = np.array( data.evrCodes + [ d[dEvr] for d in
     #    masterLoop.buf ]) 
 
@@ -496,8 +485,7 @@ def merge_arrived_data(data, masterLoop, args, scales, verbose=False):
     #    masterLoop.buf ])
     #data.delayStage = np.array( data.delayStage + [ d[dDelayStage] for d
     #    in masterLoop.buf ])
-    #data.fsTiming = np.array( data.fsTiming + [ d[dFsTiming] for d in
-    #    masterLoop.buf ])
+    data.fsTiming = np.array([d[dFsTiming] for d in masterLoop.buf])
     #data.ttTime = np.array( data.ttTime + [ d[dTtTime] for
     #    d in masterLoop.buf ] )
 
@@ -603,23 +591,124 @@ def makeTimingHistogram(data):
             'roi1' : roi1Binned}
 
 
-l3BuffLen = 1000
+l3BuffLen = 100000
 l3Buff = deque([], l3BuffLen)
 l3SigBuff = deque([], l3BuffLen)
 def l3Plot(data):
-    fee = data.gasDet[:,2:].mean(axis=1)
-    full = data.full.mean(axis=1) / fee
-    #roi0 = data.intRoi0.mean(axis=1) / fee
-    #roi1 = data.intRoi1.mean(axis=1) / fee
+    fee = data.gasDet[:,:2].mean(axis=1)
+    #full = data.full.mean(axis=1) / fee
+    sig = data.intRoi0.mean(axis=1) / fee
+    #sig = data.intRoi1.mean(axis=1) / fee
 
-    I = fee > 0.005
+    I = fee > 0.5
     
+    if I.sum() == 0:
+        return
+    #l3Buff.append(data.ebEnergyL3[I].mean())
+    #l3SigBuff.append((sig[I]/fee[I]).mean())
+
     l3Buff.extend(data.ebEnergyL3[I])
-    l3SigBuff.extend(full[I]/fee[I])
+    l3SigBuff.extend((sig[I]/fee[I]))
     
+    if len(l3Buff) > 1:
+        #print len(l3Buff)
+        #print len(l3SigBuff)
+        l3_plot = XYPlot('', 'L3 plot',
+                [np.array(l3Buff)*1e6],
+                [np.array(l3SigBuff)],
+                xlabel={'axis_title': 'L3 energy', 'axis_units': 'eV'},
+                ylabel={'axis_title': 'signal'},
+                formats=['g'])
+        publish.send('l3', l3_plot)
 
-    return {'l3':np.array(l3Buff),
-            'signal':np.array(l3SigBuff)}
+fsBuffLen = 10000
+fsBuff = deque([], fsBuffLen)
+fsSigBuff = deque([], fsBuffLen)
+def fsPlot(data):
+    #print 'fs plotting'
+    fee = data.gasDet[:,:2].mean(axis=1)
+    #full = data.full.mean(axis=1) / fee
+    #sig = data.intRoi0.mean(axis=1) / fee
+    #sig = data.intRoi1.mean(axis=1) / fee
+    sig = data.int_e_roi_1.mean(axis=1) / fee
+
+    I = fee > 0.05
+    #print fee
+    #print I.sum() 
+    if I.sum() == 0:
+        #print 'fs 1'
+        return
+    #fsBuff.append(data.ebEnergyL3[I].mean())
+    #fsSigBuff.append((sig[I]/fee[I]).mean())
+
+    fsBuff.extend(data.fsTiming[I])
+    fsSigBuff.extend((sig[I]/fee[I]))
+
+    if len(fsBuff) < 2:
+        #print 'fs 2'
+        return
+
+    #print fsBuff[0]
+    t_min = np.min(fsBuff) - 1e-6
+    t_max = np.max(fsBuff) + 1e-6
+    t_lims = np.linspace(t_min, t_max, 1024)
+    #sig_lims = np.linspace(np.min(fsSigBuff), np.max(fsSigBuff), 8)
+    #print 't_lims', t_lims
+    #print 'sig_lims', sig_lims
+    #image, _, _ = np.histogram2d(fsBuff, fsSigBuff, [t_lims, sig_lims])
+    #image /= image.max()
+    #print image
+
+    hist, _ = np.histogram(fsBuff, t_lims, weights=fsSigBuff)
+    t_hist, _ = np.histogram(fsBuff, t_lims)
+    signal = hist / t_hist
+    t_ax = (t_lims[:-1] + (t_lims[1]-t_lims[0])/2 - 4581.15705) * 1e-9
+
+
+    #dt = (t_lims[1] - t_lims[0]) * 1e-9
+    #t_start = (t_min - 4581.146) * 1e-9
+
+    #ds = sig_lims[1] - sig_lims[0]
+    #s_start = sig_lims[0]
+    #print s_start, ds
+    
+    if len(fsBuff) > 1:
+        #print 'fs 3'
+        #fs_plot = Image('', 'timing plot', image.T,
+        #        aspect_lock=False,
+        #        #pos=[t_start, 0],
+        #        #scale=[dt, 1],
+        #        xlabel={'axis_title': 'fs timing',
+        #                'axis_units': 'bin'},
+        #        ylabel={'axis_title': 'signal'})
+        fs_plot = XYPlot('', 'fs plot',
+                [t_ax],
+                [signal],
+                xlabel={'axis_title': 'fs timing [-4581.15705 ns]',
+                        'axis_units': 's'},
+                ylabel={'axis_title': 'signal'},
+                formats=['b'])
+        #3print 'fs 4'
+        publish.send('fs', fs_plot)
+
+def angle_energy(data, scales):
+    energy_scale_length = len(scales.energy_roi_0_eV)
+    image = np.empty((energy_scale_length, 16))
+    for i in range(16):
+        image[:, i] = data.energy_trace_average[i][scales.energy_roi_0_slice]
+        image[:, i] /= image[:, i].sum()
+    image[np.isnan(image)] = 0
+    nick = Image('', 'Nick plot', image,
+                 #aspect_ratio=0.01,
+                 aspect_lock=False,
+                 pos=[-11.25, scales.energy_roi_0_eV[0]],
+                 scale=[22.5,
+                     scales.energy_roi_0_eV[1]-scales.energy_roi_0_eV[0]],
+                 xlabel={'axis_title': 'angle', 'axis_units': 'degree'},
+                 ylabel={'axis_title': 'energy', 'axis_units': 'eV'})
+    publish.send('nick', nick)
+
+
 
 def psmon_plotting(data, scales, args):
     ##########################################
@@ -641,8 +730,8 @@ def psmon_plotting(data, scales, args):
             trace[-1] = max
 
     xfel_names = [16] + range(1,16)
-    daq_names = ['1_8', '4_1', '4_2', '4_3', '4_4', '4_5', '4_6', '4_7', '4_8',
-                 '1_1', '1_2', '1_3', '1_4', '1_5', '1_6', '1_7', '1_8']
+    daq_names = ['1_7', '4_1', '4_2', '4_3', '4_4', '4_5', '4_6', '4_7', '4_8',
+                 '1_1', '1_2', '1_3', '2_1', '1_4', '2_2', '1_6']
 
     for i in range(8):
         traces.add(XYPlot(('Single shots' if args.traceAverage in [1, None]
@@ -713,24 +802,20 @@ def psmon_plotting(data, scales, args):
 
     #############################################
     # Angle-Energy image
+    angle_energy(data, scales)
 
-    energy_scale_length = len(scales.energy_roi_0_eV)
-    image = np.empty((energy_scale_length, 16))
-    for i in range(16):
-        image[:, i] = data.energy_trace_average[i][scales.energy_roi_0_slice]
-        image[:, i] /= image[:, i].sum()
-    image[np.isnan(image)] = 0
-    nick = Image('', 'Nick plot', image,
-                 #aspect_ratio=0.01,
-                 aspect_lock=False,
-                 pos=[0, scales.energy_roi_0_eV[0]],
-                 scale=[22.5,
-                     scales.energy_roi_0_eV[1]-scales.energy_roi_0_eV[0]],
-                 xlabel={'axis_title': 'angle', 'axis_units': 'degree'},
-                 ylabel={'axis_title': 'energy', 'axis_units': 'eV'})
-    publish.send('nick', nick)
+    ###########################################
+    phi = np.arange(0, 360, 22.5)
+    test = XYPlot('', 'test', [phi, phi],
+            [data.int_e_roi_1[-1]/data.int_e_roi_3[-1],
+                data.int_e_roi_2[-1]/data.int_e_roi_3[-1]])
+    publish.send('test', test)
 
+    ###########################################
+    # L3 plot
+    #l3Plot(data)
 
+    fsPlot(data)
 
 def openSaveFile(format, online=False, config=None):
     fileName = '/reg/neh/home/alindahl/output/amoi0114/'
@@ -892,7 +977,6 @@ def main(args, verbose=False):
                 #print 'm3'
                 # Send data for plotting
                 psmon_plotting(master_data, scales, args)
-                #zmqPlotting(eventData, augerAverage, scales, zmq)
 
                 if args.saveData != 'no':
                     writeDataToFile(saveFile, eventData, args.saveData)
@@ -900,10 +984,6 @@ def main(args, verbose=False):
                 #print 'm4'
             else:
                 #print 'w1'
-                # An event data container
-                eventData = event_data_container(args)
-                #print 'w2'
-                
                 # Get the next event
                 evt = events.next()
                 cb.set_raw_data(evt)
