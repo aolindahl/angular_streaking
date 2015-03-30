@@ -82,6 +82,8 @@ s += 1
 nEvr = 10
 dEvr = slice(s, s+nEvr)
 s += nEvr
+d_energy_trace_limits = slice(s, s+2*16)
+s += 2*16
 
 dSize = s
 
@@ -325,6 +327,11 @@ def get_event_data(config, scales, detCalib,
     data[d_int_e_roi_3] = cb.get_intensity_distribution(rois=3,
                                                         domain='Energy')
 
+    trace_limits = np.array(cb.get_energy_spectra_width(
+        threshold_V=5e-6, use_rel=True, roi=0, min_width_eV=3))
+    #print 'trace limits', trace_limits
+    data[d_energy_trace_limits] = trace_limits[:, :2].reshape(-1)
+
     #def get_intensity_distribution(self, rois=[slice(None)]*16,
     #        domain='Time', verbose=None, detFactors=[1]*16):
 
@@ -392,7 +399,7 @@ def get_event_data(config, scales, detCalib,
     #evtData.delayStage.append( - stage * 2 / c_0_mm_per_fs )
 
     ## Laster to x-ray locking system timing
-    data[dFsTiming] = epics.value('LAS:FS1:VIT:FS_TGT_TIME')
+    data[dFsTiming] = epics.value('LAS:FS1:VIT:FS_TGT_TIME_DIAL')
     #fs = epics.value('LAS:FS1:VIT:FS_TGT_TIME')
     #if fs is None: fs = np.nan
     #evtData.fsTiming.append( fs * 1e6)
@@ -471,6 +478,11 @@ def merge_arrived_data(data, masterLoop, args, scales, verbose=False):
     data.int_e_roi_1 = np.array([d[d_int_e_roi_1] for d in masterLoop.buf])
     data.int_e_roi_2 = np.array([d[d_int_e_roi_2] for d in masterLoop.buf])
     data.int_e_roi_3 = np.array([d[d_int_e_roi_3] for d in masterLoop.buf])
+
+    data.energy_trace_bounds = np.array(
+            [d[d_energy_trace_limits] for
+             d in masterLoop.buf]).reshape(-1, 16, 2)
+    #data.trace_bounds[
 
     #data.positions = np.array( data.positions ) 
 
@@ -649,9 +661,9 @@ def fsPlot(data):
         return
 
     #print fsBuff[0]
-    t_min = np.min(fsBuff) - 1e-6
-    t_max = np.max(fsBuff) + 1e-6
-    t_lims = np.linspace(t_min, t_max, 1024)
+    t_min = np.min(fsBuff) - 10e-6
+    t_max = np.max(fsBuff) + 10e-6
+    t_lims = np.arange(t_min, t_max, 10e-6)
     #sig_lims = np.linspace(np.min(fsSigBuff), np.max(fsSigBuff), 8)
     #print 't_lims', t_lims
     #print 'sig_lims', sig_lims
@@ -662,7 +674,7 @@ def fsPlot(data):
     hist, _ = np.histogram(fsBuff, t_lims, weights=fsSigBuff)
     t_hist, _ = np.histogram(fsBuff, t_lims)
     signal = hist / t_hist
-    t_ax = (t_lims[:-1] + (t_lims[1]-t_lims[0])/2 - 4581.15705) * 1e-9
+    t_ax = (t_lims[:-1] + (t_lims[1]-t_lims[0])/2) * 1e-9
 
 
     #dt = (t_lims[1] - t_lims[0]) * 1e-9
@@ -684,7 +696,7 @@ def fsPlot(data):
         fs_plot = XYPlot('', 'fs plot',
                 [t_ax],
                 [signal],
-                xlabel={'axis_title': 'fs timing [-4581.15705 ns]',
+                xlabel={'axis_title': 'fs timing dial',
                         'axis_units': 's'},
                 ylabel={'axis_title': 'signal'},
                 formats=['b'])
@@ -708,6 +720,39 @@ def angle_energy(data, scales):
                  ylabel={'axis_title': 'energy', 'axis_units': 'eV'})
     publish.send('nick', nick)
 
+
+tree_buff_length = 2000
+tree_width_buff = deque([], tree_buff_length)
+tree_center_buff = deque([], tree_buff_length)
+
+def christmas_tree_plot(data, scales):
+    #print 'energy trace bounds', data.energy_trace_bounds
+    #print data.energy_trace_bounds.shape
+    centers = data.energy_trace_bounds[:, :, :].mean(axis=2).reshape(-1)
+    widths = (data.energy_trace_bounds[:, :, 1] -
+              data.energy_trace_bounds[:, :, 0]).reshape(-1)
+
+    I = np.isfinite(centers) & np.isfinite(widths)
+
+    tree_width_buff.extend(widths[I])
+    tree_center_buff.extend(centers[I])
+    buff_len = len(tree_width_buff)
+    print 'tree buff len = ', buff_len
+    if buff_len < 2:
+        return
+    s_old = slice(0, 1700)
+    s_new = slice(1700, None)
+    tree = XYPlot('', 'Christmas tree',
+                  [np.array(tree_center_buff)[s_old],
+                   np.array(tree_center_buff)[s_new]],
+                  [np.array(tree_width_buff)[s_old],
+                   np.array(tree_width_buff)[s_new]],
+                  xlabel={'axis_title': 'center', 'axis_units': 'eV'},
+                  ylabel={'axis_title': 'width', 'axis_units': 'eV'},
+                  formats=['b', 'r'])
+
+    publish.send('tree', tree)
+                  
 
 
 def psmon_plotting(data, scales, args):
@@ -816,6 +861,8 @@ def psmon_plotting(data, scales, args):
     #l3Plot(data)
 
     fsPlot(data)
+
+    christmas_tree_plot(data, scales)
 
 def openSaveFile(format, online=False, config=None):
     fileName = '/reg/neh/home/alindahl/output/amoi0114/'
