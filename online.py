@@ -279,7 +279,7 @@ def get_event_data(config, scales, detCalib,
     #data[dRank](rank)
 
     time_amplitudes = cb.get_time_amplitudes()
-    if None in time_amplitudes:
+    if np.any([len(tr) == 0 for tr in time_amplitudes]):
         return None
 
     data[dTraces] = np.nan
@@ -1004,7 +1004,7 @@ def main(args, verbose=False):
 
     
         # Make a cookie box object
-        cb = cookie_box.CookieBox(config, verbose=False if rank==0 else False)
+        cb = cookie_box.CookieBox(config, verbose=False if rank < 2 else False)
 
         # Read the detector transmission calibrations
         detCalib = getDetectorCalibration(verbose=verbose,
@@ -1017,7 +1017,7 @@ def main(args, verbose=False):
                
     
         # Connect to the correct datasource
-        ds = connect_to_data_source(args, config, verbose=False)
+        ds = connect_to_data_source(args, config, verbose=verbose)
         if not args.offline:
             events = ds.events()
         else:
@@ -1096,7 +1096,7 @@ def main(args, verbose=False):
                     continue
         
                 merge_arrived_data(master_data, masterLoop, args,
-                        scales, verbose=False)
+                        scales, verbose=verbose)
 
     
                 #print 'm3'
