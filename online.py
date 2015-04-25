@@ -288,8 +288,8 @@ def get_event_data(config, scales, detCalib,
     #print data.shape, dTraces.start, dTraces.stop
     start = dTraces.start
     for t_sig in time_amplitudes:
-        if t_sig is None:
-            return req
+        if len(t_sig) == 0:
+            return None
         #print len(t_sig)
         #print start, start+len(t_sig)
         #print data.shape, data[dTraces].shape
@@ -445,7 +445,7 @@ def send_data_to_master(data, req, buffer, verbose=False):
  
 def merge_arrived_data(data, masterLoop, args, scales, verbose=False):
     if verbose:
-        print 'Merging master and worker data.'
+        print 'Merging arrived data.'
         #print 'masterLoop.buf =', masterLoop.buf
     # Unpack the data
     #data.sender = [ d[dRank] for d in masterLoop.buf ]
@@ -500,7 +500,7 @@ def merge_arrived_data(data, masterLoop, args, scales, verbose=False):
 
 
     for i in range( len( data.gasDet ) ):
-        if data.gasDet[i].mean() > args.tAFee:
+        if args.tAFee is None or data.gasDet[i].mean() > args.tAFee:
             data.traceBuffer.append(data.timeSignals_V[i])
             data.roi_0_buffer.append(data.intRoi0[i])
             data.energy_trace_buffer.append(data.energy_signals[i])
@@ -511,9 +511,9 @@ def merge_arrived_data(data, masterLoop, args, scales, verbose=False):
         data.roi_0_average = np.mean(data.roi_0_buffer, axis=0)
         data.energy_trace_average = np.mean(data.energy_trace_buffer, axis=0)
     else:
-        data.traceAverage = None
-        data.roi_0_average = None
-        data.energy_trace_aveage = None
+        data.traceAverage = np.array(())
+        data.roi_0_average = np.array(())
+        data.energy_trace_average = np.array(())
 
         
 
@@ -609,7 +609,8 @@ def l3Plot(data):
     sig = data.intRoi0.mean(axis=1) / fee
     #sig = data.intRoi1.mean(axis=1) / fee
 
-    I = fee > 0.5
+    #I = fee > 0.5
+    I = np.isfinite(sig)
     
     if I.sum() == 0:
         return
@@ -703,6 +704,8 @@ def fsPlot(data):
 def angle_energy(data, scales):
     #############################################
     # Angle-Energy image
+    if len(data.energy_trace_average) == 0:
+        return
     energy_scale_length = len(scales.energy_roi_0_eV)
     image = np.empty((energy_scale_length, 16))
     for i in range(16):
@@ -827,8 +830,8 @@ def trace_plot(data, scales, args):
             trace[-1] = max
 
     xfel_names = [16] + range(1,16)
-    daq_names = ['1_7', '4_1', '4_2', '4_3', '4_4', '4_5', '4_6', '4_7', '4_8',
-                 '1_1', '1_2', '1_3', '2_1', '1_4', '2_2', '1_6']
+    daq_names = ['1_8', '4_1', '4_2', '4_3', '4_4', '4_5', '4_6', '4_7', '4_8',
+                 '1_1', '1_2', '1_3', '1_4', '1_5', '1_6', '1_7']
 
     for i in range(8):
         traces.add(XYPlot(('Single shots' if args.traceAverage in [1, None]
@@ -924,13 +927,13 @@ def psmon_plotting(data, scales, args):
     #print 'plotting'
     trace_plot(data, scales, args)
     #polar_plot(data)
-    energy_trace_plot(data, scales)
-    angle_energy(data, scales)
-    test_plot(data)
+    #energy_trace_plot(data, scales)
+    #angle_energy(data, scales)
+    #test_plot(data)
     l3Plot(data)
     #fsPlot(data)
-    christmas_tree_plot(data, scales)
-    jia_plot(data, scales)
+    #christmas_tree_plot(data, scales)
+    #jia_plot(data, scales)
 
 def openSaveFile(format, online=False, config=None):
     fileName = '/reg/neh/home/alindahl/output/amoi0114/'
@@ -1096,7 +1099,7 @@ def main(args, verbose=False):
                     continue
         
                 merge_arrived_data(master_data, masterLoop, args,
-                        scales, verbose=verbose)
+                        scales, verbose=False)
 
     
                 #print 'm3'

@@ -109,7 +109,7 @@ def parse():
             '-tAFee',
             type = float,
             metavar = 'threshold_mJ',
-            default = 0.0,
+            default = None,
             help = ('Threshold for the pulse energy to be used in the'
                 + ' averaging.'))
 
