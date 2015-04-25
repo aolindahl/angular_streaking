@@ -17,7 +17,7 @@ warnings.simplefilter('error')
 
 ############
 # Custom modules
-# Soume found in:
+# Some found in:
 sys.path.append( os.path.dirname(os.path.abspath(__file__)) +  '/aolPyModules')
 import cookie_box
 import tof
@@ -30,6 +30,7 @@ import simplepsana
 world = MPI.COMM_WORLD
 rank = world.Get_rank()
 worldSize = world.Get_size()
+workers = worldSize-1
 
 if rank == 0:
     from psmon import publish
@@ -55,8 +56,8 @@ s += 16
 #s += 1
 #dFiducials = s
 #s += 1
-#dTime = s
-#s += 1
+dTime = s
+s += 1
 #dFull = slice(s, s+16)
 #s += 16
 dIntRoi0 = slice(s, s+16)
@@ -97,7 +98,7 @@ def connect_to_data_source(args, config, verbose=False):
         # make the shared memory string
         dataSource = 'shmem=AMO.0:stop=no'
     else:
-        dataSource = config.offline_source
+        dataSource = ':'.join([config.offline_source, 'idx'])
         #config.makeTofConfigList(online=False)
         if verbose:
             print config
@@ -214,10 +215,6 @@ def master_loop_setup(args, scales):
     # Make template of the array that should be sent between the ranks
     masterLoop.bufTemplate = np.empty(dSize, dtype=float)
     
-    # Make empty queues.
-    masterLoop.req = deque()
-    masterLoop.buf = deque()
-        
     # Initialize the stop time
     masterLoop.tStop = time.time()
     
@@ -328,7 +325,7 @@ def get_event_data(config, scales, detCalib,
                                                         domain='Energy')
 
     trace_limits = np.array(cb.get_energy_spectra_width(
-        threshold_V=5e-6, use_rel=True, roi=0, min_width_eV=3))
+        threshold_V=2e-6, use_rel=True, roi=0, min_width_eV=5))
     #print 'trace limits', trace_limits
     data[d_energy_trace_limits] = trace_limits[:, :2].reshape(-1)
 
@@ -386,7 +383,7 @@ def get_event_data(config, scales, detCalib,
                         
     # timing information
     #evtData.fiducials.append( lcls.getEventFiducial())
-    #evtData.times.append( lcls.getEventTime())
+    data[dTime] = lcls.getEventTime()
 
     #evtData.deltaK.append(epics.value('USEG:UND1:3350:KACT'))
     #evtData.deltaEnc.append( np.array(
@@ -453,7 +450,7 @@ def merge_arrived_data(data, masterLoop, args, scales, verbose=False):
     # Unpack the data
     #data.sender = [ d[dRank] for d in masterLoop.buf ]
     #data.fiducials = [ d[dFiducials] for d in masterLoop.buf ]
-    #data.times = [ d[dTime] for d in masterLoop.buf ]
+    data.times = np.array([d[dTime] for d in masterLoop.buf])
         
     #data.full = [d[dFull] for d in masterLoop.buf]
     data.intRoi0 = np.array([d[dIntRoi0] for d in masterLoop.buf])
@@ -508,7 +505,7 @@ def merge_arrived_data(data, masterLoop, args, scales, verbose=False):
             data.roi_0_buffer.append(data.intRoi0[i])
             data.energy_trace_buffer.append(data.energy_signals[i])
 
-    print 'trace buffer length:', len(data.traceBuffer)
+    #print 'trace buffer length:', len(data.traceBuffer)
     if len(data.traceBuffer) > 0:
         data.traceAverage = np.mean(data.traceBuffer, axis=0)
         data.roi_0_average = np.mean(data.roi_0_buffer, axis=0)
@@ -704,11 +701,13 @@ def fsPlot(data):
         publish.send('fs', fs_plot)
 
 def angle_energy(data, scales):
+    #############################################
+    # Angle-Energy image
     energy_scale_length = len(scales.energy_roi_0_eV)
     image = np.empty((energy_scale_length, 16))
     for i in range(16):
         image[:, i] = data.energy_trace_average[i][scales.energy_roi_0_slice]
-        image[:, i] /= image[:, i].sum()
+        #image[:, i] /= image[:, i].sum()
     image[np.isnan(image)] = 0
     nick = Image('', 'Nick plot', image,
                  #aspect_ratio=0.01,
@@ -728,9 +727,10 @@ tree_center_buff = deque([], tree_buff_length)
 def christmas_tree_plot(data, scales):
     #print 'energy trace bounds', data.energy_trace_bounds
     #print data.energy_trace_bounds.shape
-    centers = data.energy_trace_bounds[:, :, :].mean(axis=2).reshape(-1)
-    widths = (data.energy_trace_bounds[:, :, 1] -
-              data.energy_trace_bounds[:, :, 0]).reshape(-1)
+    det = 3
+    centers = data.energy_trace_bounds[:, det, :].mean(axis=1).reshape(-1)
+    widths = (data.energy_trace_bounds[:, det, 1] -
+              data.energy_trace_bounds[:, det, 0]).reshape(-1)
 
     I = np.isfinite(centers) & np.isfinite(widths)
 
@@ -752,10 +752,62 @@ def christmas_tree_plot(data, scales):
                   formats=['b', 'r'])
 
     publish.send('tree', tree)
+
+
+jia_buffer = deque([], 5000)
+jia_l3_buffer = deque([], 1000)
+current_fs = np.nan
+current_fs_buffer = deque([])
+def jia_plot(data, scales):
+    global current_fs
+    fee_list = data.gasDet[:,:2].mean(axis=1)
+    l3_list = data.ebEnergyL3
+    fs_list = data.fsTiming*1e3
+    
+    if len(jia_l3_buffer) > 2:
+        l3_mean = np.mean(jia_l3_buffer)
+    else:
+        l3_mean = np.mean(l3_list)
+    
+    I = (fee_list > 0.01) & (np.abs(l3_list-l3_mean)/l3_mean < 0.3)
+    print 'sum(I) =', I.sum()
+
+    jia_l3_buffer.extend(data.ebEnergyL3[I])
+
+    alpha = 0.
+    alpha = 7e-5
+
+    for traces, fee, l3, fs, use in zip(data.energy_signals, fee_list, 
+                                        l3_list, fs_list, I):
+        if not use:
+            continue
+        trace = traces[12, scales.energy_roi_0_slice]
+        e_shift = alpha * (l3_mean**2 - l3**2)
+        de = scales.energy_eV[1] - scales.energy_eV[0]
+        trace_roll = int(np.round(e_shift/de))
+        trace = np.roll(trace, trace_roll)/fee
+
+        if (current_fs != fs) and len(current_fs_buffer):
+            current_fs = fs
+            jia_buffer.append(np.average(current_fs_buffer, axis=0))
+            current_fs_buffer.clear()
+            image = np.array(jia_buffer)
+            jia_image = Image('fs dial {} ps'.format(fs),
+                      'Jia image', image.T,
+                      aspect_lock=False,
+                      pos=[0, scales.energy_roi_0_eV[0]],
+                      scale=[1, (scales.energy_roi_0_eV[1] - 
+                                 scales.energy_roi_0_eV[0])],
+                      xlabel={'axis_title': 'time', 'axis_units': ' sort of'},
+                      ylabel={'axis_title': 'energy',
+                              'axis_units': 'increasing down'})
+            
+            publish.send('jia', jia_image)
+
+        current_fs_buffer.append(trace)
                   
 
-
-def psmon_plotting(data, scales, args):
+def trace_plot(data, scales, args):
     ##########################################
     # Plot traces
     #print type(data.traceAverage), data.traceAverage.shape
@@ -782,8 +834,9 @@ def psmon_plotting(data, scales, args):
         traces.add(XYPlot(('Single shots' if args.traceAverage in [1, None]
                             else 'Average of {} shots'.format(
                                 args.traceAverage)),
-            '{} ({}, {}) (w) and {} ({}, {}) (r)'.format(angles[i], xfel_names[i],
-                daq_names[i], angles[i+8], xfel_names[i+8], daq_names[i+8]),
+            '{} ({}, {}) (w) and {} ({}, {}) (r)'.format(angles[i],
+                xfel_names[i], daq_names[i], angles[i+8],
+                xfel_names[i+8], daq_names[i+8]),
             [scales.time_us[i] *  1e-6,
                 scales.time_us[i+8] * 1e-6],
             [data.traceAverage[i],
@@ -795,6 +848,8 @@ def psmon_plotting(data, scales, args):
     #print 'Plotting!'
     publish.send('time_traces', traces)
 
+
+def polar_plot(data):
     ##########################################
     # Polar plot
     r = data.roi_0_average
@@ -829,9 +884,11 @@ def psmon_plotting(data, scales, args):
                    formats=['w-', 'r'])
     publish.send('polar', polar)
 
+def energy_trace_plot(data, scales):
     #############################################
     # Energy spectra plot
     energy = MultiPlot('', 'Energy traces', ncols=4)
+    angles = np.arange(0, 360, 22.5)
 
     for i in range(8):
         energy.add(XYPlot(
@@ -842,13 +899,19 @@ def psmon_plotting(data, scales, args):
             xlabel={'axis_title': 'energy', 'axis_units': 'eV'},
             ylabel={'axis_title': 'signal'},
             formats=['w-', 'r-']))
+        if i == 5:
+            energy_tuning = XYPlot('', 'Photon energy',
+                    [scales.energy_eV/2 + 280 + 870],
+                    [data.energy_trace_average[i]],
+                    xlabel={'axis_title': 'energy', 'axis_units': 'eV'},
+                    ylabel={'axis_title': 'signal'},
+                    formats=['w-'])
+            publish.send('energy', energy_tuning)
 
     publish.send('energy_traces', energy)
 
-    #############################################
-    # Angle-Energy image
-    angle_energy(data, scales)
 
+def test_plot(data):
     ###########################################
     phi = np.arange(0, 360, 22.5)
     test = XYPlot('', 'test', [phi, phi],
@@ -856,13 +919,18 @@ def psmon_plotting(data, scales, args):
                 data.int_e_roi_2[-1]/data.int_e_roi_3[-1]])
     publish.send('test', test)
 
-    ###########################################
-    # L3 plot
-    #l3Plot(data)
 
-    fsPlot(data)
-
+def psmon_plotting(data, scales, args):
+    #print 'plotting'
+    trace_plot(data, scales, args)
+    #polar_plot(data)
+    energy_trace_plot(data, scales)
+    angle_energy(data, scales)
+    test_plot(data)
+    l3Plot(data)
+    #fsPlot(data)
     christmas_tree_plot(data, scales)
+    jia_plot(data, scales)
 
 def openSaveFile(format, online=False, config=None):
     fileName = '/reg/neh/home/alindahl/output/amoi0114/'
@@ -950,14 +1018,23 @@ def main(args, verbose=False):
     
         # Connect to the correct datasource
         ds = connect_to_data_source(args, config, verbose=False)
-        events = ds.events()
+        if not args.offline:
+            events = ds.events()
+        else:
+            run = ds.runs().next()
+            times = run.times()
+            event_counter = args.skip + rank
 
         # Get the epics store
         epics = ds.env().epicsStore()
     
         # Get the next event. The purpouse here is only to make sure the
         # datasource is initialized enough so that the env object is avaliable.
-        evt = events.next()
+        if not args.offline:
+            evt = events.next()
+        else:
+            evt = run.event(times[event_counter])
+            event_counter += 1
     
     
         # Get the scales that we need
@@ -984,6 +1061,7 @@ def main(args, verbose=False):
         else:
             # set an empty request
             req = None
+            # and the corresponding buffer
             buffer = np.empty(dSize, dtype=float)
             t1 = 0
     
@@ -1032,7 +1110,11 @@ def main(args, verbose=False):
             else:
                 #print 'w1'
                 # Get the next event
-                evt = events.next()
+                if not args.offline:
+                    evt = events.next()
+                else:
+                    evt = run.event(times[event_counter])
+                    event_counter += workers
                 cb.set_raw_data(evt)
                 lcls.setEvent(evt)
                 #print 'w3'
