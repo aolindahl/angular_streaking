@@ -156,6 +156,11 @@ def parse():
             help = ('Output the data to a file' + 
                 ' Default = no'))
 
+    parser.add_argument(
+            '--skip',
+            type = int,
+            default = 0,
+            help = ('Skip events at start of run, for offline use only.'))
 
     args = parser.parse_args()
 
