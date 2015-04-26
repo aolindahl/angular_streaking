@@ -631,7 +631,55 @@ def l3Plot(data):
                 formats=['g'])
         publish.send('l3', l3_plot)
 
-fsBuffLen = 10000
+
+N = 10000
+l3_trace_buff = deque([], N)
+l3_trace_sig_buff = deque([], N)
+def l3_trace_image(data, scales):
+    det = 4
+    fee = data.gasDet[:2].mean(axis=1)
+    
+    idx = np.where(fee > 0.001)[0]
+    if len(idx) < 1:
+        return
+    for i in idx:
+        l3_trace_buff.append(data.ebEnergyL3[i])
+        l3_trace_sig_buff.append(data.timeSignals_V[i][det] / fee[i])
+
+    l3min = np.min(l3_trace_buff) * (1 - 0.00001)
+    l3max = np.max(l3_trace_buff) * (1 + 0.00001)
+    N_l3_bins = 2**7
+    l3_edges = np.linspace(l3min, l3max, N_l3_bins+1)
+    bin_counter = np.zeros((N_l3_bins,))
+    img = np.zeros((len(l3_trace_sig_buff[-1]), N_l3_bins))
+
+    for i, l3 in enumerate(l3_trace_buff):
+       bin = l3_edges.searchsorted(l3, side='right')-1
+       bin_counter[bin] += 1
+       img[:, bin] += l3_trace_sig_buff[i]
+
+    for bin in range(N_l3_bins):
+        if bin_counter[bin] == 0:
+            continue
+        img[:, bin] /= bin_counter[bin]
+
+    time_scale = scales.time_us[det] * 1e-6
+    dt = time_scale[1] - time_scale[0]
+    t0 = time_scale[0] - dt/2
+    de = l3_edges[1] - l3_edges[0]
+
+    plot = Image('', 'TOF vs. L3 energy',
+                 img.T,
+                 aspect_lock=False,
+                 pos=[t0, 0],
+                 scale=[dt, 1],
+                 xlabel={'axis_title': 'TOF', 'axis_units': 's'},
+                 ylabel={'axis_title': 'l3 energy', 'axis_units': 'arb. u.'})
+
+
+    publish.send('l3_trace', plot)
+
+fsBuffLen = 1000
 fsBuff = deque([], fsBuffLen)
 fsSigBuff = deque([], fsBuffLen)
 def fsPlot(data):
@@ -922,7 +970,6 @@ def test_plot(data):
                 data.int_e_roi_2[-1]/data.int_e_roi_3[-1]])
     publish.send('test', test)
 
-
 def psmon_plotting(data, scales, args):
     #print 'plotting'
     trace_plot(data, scales, args)
@@ -934,6 +981,7 @@ def psmon_plotting(data, scales, args):
     #fsPlot(data)
     #christmas_tree_plot(data, scales)
     #jia_plot(data, scales)
+    l3_trace_image(data, scales)
 
 def openSaveFile(format, online=False, config=None):
     fileName = '/reg/neh/home/alindahl/output/amoi0114/'
